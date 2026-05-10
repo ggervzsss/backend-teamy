@@ -1,6 +1,6 @@
 ## Teamy API
 
-FastAPI backend for Teamy authentication.
+FastAPI backend for Teamy authentication. The Docker stack uses MySQL 8.4 for local development and exposes it on host port `3307` by default.
 
 ### Local Docker startup
 

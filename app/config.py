@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    database_url: str = "postgresql+asyncpg://teamy:teamy@localhost:5432/teamy"
+    database_url: str = "mysql+aiomysql://teamy:teamy@localhost:3307/teamy?charset=utf8mb4"
     secret_key: str = Field(default="change-me-in-development-only", min_length=16)
     session_cookie_name: str = "teamy_session"
     session_max_age_seconds: int = 60 * 60 * 24 * 7
