@@ -22,10 +22,12 @@ from app.schemas import (
     TaskAssigneeResponse,
     TaskAssigneeUpdateRequest,
     TaskCreateRequest,
+    TaskLinkedFileCreateRequest,
     TaskListResponse,
     TaskResponse,
     TaskReviewRequest,
     TaskSocketTicketResponse,
+    TaskUpdateRequest,
     UserResponse,
 )
 from app.security import create_task_socket_ticket, decode_session_token, decode_task_socket_ticket
@@ -70,6 +72,38 @@ def require_leader(membership: ProjectMember) -> None:
 async def get_project_member_user_ids(db: AsyncSession, project_id: UUID) -> set[UUID]:
     result = await db.execute(select(ProjectMember.user_id).where(ProjectMember.project_id == project_id))
     return set(result.scalars().all())
+
+
+async def get_project_leader_user_ids(db: AsyncSession, project_id: UUID) -> set[UUID]:
+    result = await db.execute(select(ProjectMember.user_id).where(ProjectMember.project_id == project_id, ProjectMember.role == "leader"))
+    return set(result.scalars().all())
+
+
+async def user_is_task_assignee(db: AsyncSession, task_id: UUID, user_id: UUID) -> bool:
+    result = await db.execute(select(TaskAssignee.id).where(TaskAssignee.task_id == task_id, TaskAssignee.user_id == user_id))
+    return result.scalar_one_or_none() is not None
+
+
+def require_task_manager(project_member: ProjectMember, task: Task, user: User) -> None:
+    if project_member.role != "leader" and task.created_by_user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the task creator or project leader can edit this task")
+
+
+def build_linked_file_resource(project_id: UUID, user_id: UUID, fallback_title: str, payload: TaskLinkedFileCreateRequest) -> FileResource:
+    linked_file_title = (payload.title or fallback_title).strip()
+    if not linked_file_title:
+        linked_file_title = fallback_title.strip()
+    linked_file_url = payload.url.strip() if payload.url else None
+    if payload.mode == "link" and not linked_file_url:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="URL is required for linked external files")
+    return FileResource(
+        project_id=project_id,
+        title=linked_file_title,
+        kind=payload.mode,
+        url=linked_file_url if payload.mode == "link" else None,
+        content_html=sanitize_html("<p></p>") if payload.mode == "doc" else None,
+        created_by_user_id=user_id,
+    )
 
 
 async def serialize_task_linked_files(db: AsyncSession, task: Task) -> list[FileResourceSummaryResponse]:
@@ -148,6 +182,18 @@ async def get_task_for_project(db: AsyncSession, project_id: UUID, task_id: UUID
 async def move_task_after_assignee_update(db: AsyncSession, task: Task) -> None:
     assignee_result = await db.execute(select(TaskAssignee).where(TaskAssignee.task_id == task.id))
     assignees = list(assignee_result.scalars().all())
+    leader_user_ids = await get_project_leader_user_ids(db, task.project_id)
+    if (
+        task.status != "todo"
+        and assignees
+        and any(assignee.user_id in leader_user_ids and assignee.status != "ready_for_review" for assignee in assignees)
+        and all(assignee.status == "ready_for_review" for assignee in assignees if assignee.user_id not in leader_user_ids)
+        and any(assignee.user_id not in leader_user_ids for assignee in assignees)
+    ):
+        task.status = "for_review"
+        task.reviewed_by_user_id = None
+        task.reviewed_at = None
+        return
     if any(assignee.status in {"in_progress", "ready_for_review"} for assignee in assignees):
         task.status = "in_progress"
     else:
@@ -209,9 +255,8 @@ async def create_task(
     membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
     db: AsyncSession = Depends(get_db),
 ) -> TaskResponse:
-    project, project_member = membership
+    project, _ = membership
     require_project_active(project)
-    require_leader(project_member)
 
     assignee_ids = list(dict.fromkeys(payload.assignee_ids))
     member_user_ids = await get_project_member_user_ids(db, project.id)
@@ -235,20 +280,7 @@ async def create_task(
         db.add(TaskAssignee(task_id=task.id, user_id=assignee_id, status=payload.initial_status))
 
     if payload.linked_file is not None:
-        linked_file_title = (payload.linked_file.title or payload.title).strip()
-        if not linked_file_title:
-            linked_file_title = payload.title.strip()
-        linked_file_url = payload.linked_file.url.strip() if payload.linked_file.url else None
-        if payload.linked_file.mode == "link" and not linked_file_url:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="URL is required for linked external files")
-        resource = FileResource(
-            project_id=project.id,
-            title=linked_file_title,
-            kind=payload.linked_file.mode,
-            url=linked_file_url if payload.linked_file.mode == "link" else None,
-            content_html=sanitize_html("<p></p>") if payload.linked_file.mode == "doc" else None,
-            created_by_user_id=user.id,
-        )
+        resource = build_linked_file_resource(project.id, user.id, payload.title, payload.linked_file)
         db.add(resource)
         await db.flush()
         db.add(TaskFileLink(task_id=task.id, file_resource_id=resource.id))
@@ -257,6 +289,98 @@ async def create_task(
     await db.refresh(task)
     response = await serialize_task(db, task)
     await manager.broadcast(project.id, "task.created", response)
+    return response
+
+
+@router.patch("/tasks/{task_id}", response_model=TaskResponse)
+async def update_task(
+    task_id: UUID,
+    payload: TaskUpdateRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
+    db: AsyncSession = Depends(get_db),
+) -> TaskResponse:
+    project, project_member = membership
+    require_project_active(project)
+    task = await get_task_for_project(db, project.id, task_id)
+    require_task_manager(project_member, task, user)
+    if task.status == "done":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Done tasks cannot be edited")
+
+    if "title" in payload.model_fields_set and payload.title is not None:
+        task.title = payload.title.strip()
+    if "description" in payload.model_fields_set:
+        task.description = payload.description.strip() if payload.description else None
+    if payload.priority is not None:
+        task.priority = payload.priority
+    if "due_date" in payload.model_fields_set:
+        task.due_date = payload.due_date
+
+    assignees_changed = False
+    if payload.assignee_ids is not None:
+        assignee_ids = list(dict.fromkeys(payload.assignee_ids))
+        if not assignee_ids:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Choose at least one assignee")
+        member_user_ids = await get_project_member_user_ids(db, project.id)
+        invalid_assignees = [assignee_id for assignee_id in assignee_ids if assignee_id not in member_user_ids]
+        if invalid_assignees:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Every assignee must be a project member")
+
+        assignee_result = await db.execute(select(TaskAssignee).where(TaskAssignee.task_id == task.id))
+        current_assignees = {assignee.user_id: assignee for assignee in assignee_result.scalars().all()}
+        next_assignee_ids = set(assignee_ids)
+        if set(current_assignees) != next_assignee_ids:
+            assignees_changed = True
+
+        for assignee_user_id, assignee in current_assignees.items():
+            if assignee_user_id not in next_assignee_ids:
+                await db.delete(assignee)
+
+        for assignee_id in assignee_ids:
+            if assignee_id not in current_assignees:
+                db.add(
+                    TaskAssignee(
+                        task_id=task.id,
+                        user_id=assignee_id,
+                        status="todo" if task.status == "todo" else "in_progress",
+                    )
+                )
+
+    if assignees_changed and task.status == "for_review":
+        task.status = "in_progress"
+        task.reviewed_by_user_id = None
+        task.reviewed_at = None
+
+    await db.commit()
+    await db.refresh(task)
+    response = await serialize_task(db, task)
+    await manager.broadcast(project.id, "task.updated", response)
+    return response
+
+
+@router.post("/tasks/{task_id}/linked-files", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
+async def link_task_file(
+    task_id: UUID,
+    payload: TaskLinkedFileCreateRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
+    db: AsyncSession = Depends(get_db),
+) -> TaskResponse:
+    project, project_member = membership
+    require_project_active(project)
+    task = await get_task_for_project(db, project.id, task_id)
+    is_assignee = await user_is_task_assignee(db, task.id, user.id)
+    if project_member.role != "leader" and task.created_by_user_id != user.id and not is_assignee:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only assigned members, task creators, or project leaders can link task resources")
+
+    resource = build_linked_file_resource(project.id, user.id, task.title, payload)
+    db.add(resource)
+    await db.flush()
+    db.add(TaskFileLink(task_id=task.id, file_resource_id=resource.id))
+    await db.commit()
+    await db.refresh(task)
+    response = await serialize_task(db, task)
+    await manager.broadcast(project.id, "task.updated", response)
     return response
 
 
@@ -309,7 +433,9 @@ async def submit_task_for_review(
     assignees = list(assignee_result.scalars().all())
     if not any(assignee.user_id == user.id for assignee in assignees):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only assigned members can submit this task for review")
-    if not assignees or any(assignee.status != "ready_for_review" for assignee in assignees):
+    leader_user_ids = await get_project_leader_user_ids(db, project.id)
+    non_leader_assignees = [assignee for assignee in assignees if assignee.user_id not in leader_user_ids]
+    if not assignees or not non_leader_assignees or any(assignee.status != "ready_for_review" for assignee in non_leader_assignees):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Every assignee must be ready for review first")
 
     task.status = "for_review"

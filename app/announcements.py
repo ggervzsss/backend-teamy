@@ -19,6 +19,7 @@ from app.schemas import (
     AnnouncementPinRequest,
     AnnouncementResponse,
     AnnouncementSocketTicketResponse,
+    AnnouncementUpdateRequest,
     UserResponse,
 )
 from app.security import create_announcement_socket_ticket, decode_announcement_socket_ticket, decode_session_token
@@ -103,6 +104,11 @@ async def get_announcement_for_project(db: AsyncSession, project_id: UUID, annou
     return announcement
 
 
+def require_announcement_manager(project_member: ProjectMember, announcement: Announcement, user: User) -> None:
+    if project_member.role != "leader" and announcement.created_by_user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the announcement creator or project leader can edit this announcement")
+
+
 @router.get("", response_model=AnnouncementListResponse)
 async def list_announcements(
     user: Annotated[User, Depends(get_current_user)],
@@ -163,6 +169,41 @@ async def create_announcement(
     return response
 
 
+@router.patch("/{announcement_id}", response_model=AnnouncementResponse)
+async def update_announcement(
+    announcement_id: UUID,
+    payload: AnnouncementUpdateRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
+    db: AsyncSession = Depends(get_db),
+) -> AnnouncementResponse:
+    project, project_member = membership
+    require_project_active(project)
+    announcement = await get_announcement_for_project(db, project.id, announcement_id)
+    require_announcement_manager(project_member, announcement, user)
+
+    if payload.title is not None:
+        title = payload.title.strip()
+        if not title:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Title is required")
+        announcement.title = title
+    if payload.body is not None:
+        body = payload.body.strip()
+        if not body:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Body is required")
+        announcement.body = body
+    if payload.is_pinned is not None:
+        announcement.is_pinned = payload.is_pinned
+
+    await db.commit()
+    await db.refresh(announcement)
+
+    response = await serialize_announcement(db, announcement, user.id)
+    broadcast_announcement = await serialize_announcement(db, announcement, user.id, is_read=False)
+    await manager.broadcast(project.id, {"event": "announcement.updated", "announcement": broadcast_announcement})
+    return response
+
+
 @router.get("/{announcement_id}", response_model=AnnouncementResponse)
 async def get_announcement(
     announcement_id: UUID,
@@ -196,6 +237,7 @@ async def mark_announcement_as_read(
     db: AsyncSession = Depends(get_db),
 ) -> AnnouncementResponse:
     project, _ = membership
+    require_project_active(project)
     announcement = await get_announcement_for_project(db, project.id, announcement_id)
     was_created, read_at = await mark_announcement_read(db, announcement.id, user.id)
     await db.commit()
@@ -221,6 +263,7 @@ async def update_announcement_pin(
     db: AsyncSession = Depends(get_db),
 ) -> AnnouncementResponse:
     project, _ = membership
+    require_project_active(project)
     announcement = await get_announcement_for_project(db, project.id, announcement_id)
     announcement.is_pinned = payload.is_pinned
     await db.commit()

@@ -110,6 +110,35 @@ async def test_project_members_can_pin_and_unpin_announcements(client):
 
 
 @pytest.mark.asyncio
+async def test_creator_or_leader_can_edit_announcement(client):
+    project, leader, member = await setup_project(client)
+    await logout(client)
+    await login(client, member["email"])
+    created = await client.post(
+        f"/projects/{project['id']}/announcements",
+        json={"title": "Draft update", "body": "Initial note."},
+    )
+    announcement_id = created.json()["id"]
+
+    creator_update = await client.patch(
+        f"/projects/{project['id']}/announcements/{announcement_id}",
+        json={"title": "Updated note", "body": "Published note.", "is_pinned": True},
+    )
+    assert creator_update.status_code == 200
+    assert creator_update.json()["title"] == "Updated note"
+    assert creator_update.json()["is_pinned"] is True
+    await logout(client)
+
+    await login(client, leader["email"])
+    leader_update = await client.patch(
+        f"/projects/{project['id']}/announcements/{announcement_id}",
+        json={"body": "Leader clarified note."},
+    )
+    assert leader_update.status_code == 200
+    assert leader_update.json()["body"] == "Leader clarified note."
+
+
+@pytest.mark.asyncio
 async def test_non_members_cannot_access_announcements(client):
     project, _, _ = await setup_project(client)
     await logout(client)

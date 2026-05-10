@@ -193,6 +193,12 @@ class AnnouncementCreateRequest(BaseModel):
     is_pinned: bool = False
 
 
+class AnnouncementUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    body: str | None = Field(default=None, min_length=1, max_length=4000)
+    is_pinned: bool | None = None
+
+
 class AnnouncementPinRequest(BaseModel):
     is_pinned: bool
 
@@ -225,6 +231,14 @@ class TaskCreateRequest(BaseModel):
     due_date: date | None = None
     initial_status: Literal["todo", "in_progress"] = "todo"
     linked_file: TaskLinkedFileCreateRequest | None = None
+
+
+class TaskUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=4000)
+    assignee_ids: list[UUID] | None = None
+    priority: TaskPriority | None = None
+    due_date: date | None = None
 
 
 class TaskAssigneeUpdateRequest(BaseModel):

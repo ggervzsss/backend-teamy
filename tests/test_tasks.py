@@ -80,8 +80,8 @@ async def test_project_member_can_request_task_socket_ticket(client):
 
 
 @pytest.mark.asyncio
-async def test_non_leader_cannot_create_or_review_tasks(client):
-    project, _, member_one, _ = await setup_project_with_members(client)
+async def test_project_members_can_create_tasks_but_cannot_review(client):
+    project, leader, member_one, _ = await setup_project_with_members(client)
     await logout(client)
     await login(client, member_one["email"])
 
@@ -90,7 +90,18 @@ async def test_non_leader_cannot_create_or_review_tasks(client):
         json={"title": "Member task", "assignee_ids": [member_one["id"]]},
     )
 
-    assert create_response.status_code == 403
+    assert create_response.status_code == 201
+    task_id = create_response.json()["id"]
+    await client.patch(f"/projects/{project['id']}/tasks/{task_id}/assignees/me", json={"status": "ready_for_review"})
+    await client.post(f"/projects/{project['id']}/tasks/{task_id}/submit-review")
+    review_response = await client.post(f"/projects/{project['id']}/tasks/{task_id}/review", json={"action": "approve"})
+    assert review_response.status_code == 403
+    await logout(client)
+
+    await login(client, leader["email"])
+    approved = await client.post(f"/projects/{project['id']}/tasks/{task_id}/review", json={"action": "approve"})
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "done"
 
 
 @pytest.mark.asyncio
@@ -154,3 +165,73 @@ async def test_request_changes_resets_assignees_to_progress(client):
     assert {assignee["status"] for assignee in body["assignees"]} == {"in_progress"}
     assert all(assignee["completed_at"] is None for assignee in body["assignees"])
     assert body["review_remarks"] == "Please tighten the conclusion."
+
+
+@pytest.mark.asyncio
+async def test_task_moves_to_review_when_only_assigned_leader_is_not_ready(client):
+    project, leader, member_one, _ = await setup_project_with_members(client)
+    created = await client.post(
+        f"/projects/{project['id']}/tasks",
+        json={"title": "Leader final pass", "assignee_ids": [leader["id"], member_one["id"]], "initial_status": "in_progress"},
+    )
+    task_id = created.json()["id"]
+    await logout(client)
+
+    await login(client, member_one["email"])
+    updated = await client.patch(f"/projects/{project['id']}/tasks/{task_id}/assignees/me", json={"status": "ready_for_review"})
+
+    assert updated.status_code == 200
+    body = updated.json()
+    assert body["status"] == "for_review"
+    assignee_statuses = {assignee["user"]["id"]: assignee["status"] for assignee in body["assignees"]}
+    assert assignee_statuses[leader["id"]] == "in_progress"
+    assert assignee_statuses[member_one["id"]] == "ready_for_review"
+
+
+@pytest.mark.asyncio
+async def test_creator_or_leader_can_edit_task_details(client):
+    project, leader, member_one, member_two = await setup_project_with_members(client)
+    await logout(client)
+    await login(client, member_one["email"])
+    created = await client.post(
+        f"/projects/{project['id']}/tasks",
+        json={"title": "Draft outline", "assignee_ids": [member_one["id"]], "priority": "low"},
+    )
+    task_id = created.json()["id"]
+
+    creator_update = await client.patch(
+        f"/projects/{project['id']}/tasks/{task_id}",
+        json={"title": "Draft outline v2", "priority": "high", "assignee_ids": [member_one["id"], member_two["id"]]},
+    )
+    assert creator_update.status_code == 200
+    assert creator_update.json()["title"] == "Draft outline v2"
+    assert creator_update.json()["priority"] == "high"
+    assert {assignee["user"]["id"] for assignee in creator_update.json()["assignees"]} == {member_one["id"], member_two["id"]}
+    await logout(client)
+
+    await login(client, leader["email"])
+    leader_update = await client.patch(f"/projects/{project['id']}/tasks/{task_id}", json={"description": "Use the latest project template."})
+    assert leader_update.status_code == 200
+    assert leader_update.json()["description"] == "Use the latest project template."
+
+
+@pytest.mark.asyncio
+async def test_assigned_member_can_link_external_resource_to_task(client):
+    project, _, member_one, _ = await setup_project_with_members(client)
+    created = await client.post(
+        f"/projects/{project['id']}/tasks",
+        json={"title": "Collect references", "assignee_ids": [member_one["id"]]},
+    )
+    task_id = created.json()["id"]
+    await logout(client)
+
+    await login(client, member_one["email"])
+    linked = await client.post(
+        f"/projects/{project['id']}/tasks/{task_id}/linked-files",
+        json={"mode": "link", "title": "Design brief", "url": "https://example.com/brief"},
+    )
+
+    assert linked.status_code == 201
+    body = linked.json()
+    assert body["linked_files"][0]["title"] == "Design brief"
+    assert body["linked_files"][0]["url"] == "https://example.com/brief"
