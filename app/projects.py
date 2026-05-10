@@ -1,15 +1,16 @@
+from datetime import UTC, datetime
 from random import SystemRandom
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Path, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models import Project, ProjectMember, User
-from app.schemas import ProjectCreateRequest, ProjectJoinRequest, ProjectListResponse, ProjectResponse
+from app.schemas import ProjectArchiveRequest, ProjectCreateRequest, ProjectDeleteRequest, ProjectJoinRequest, ProjectListResponse, ProjectResponse, ProjectUpdateRequest
 from app.team_realtime import broadcast_member_joined
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -48,7 +49,20 @@ async def serialize_project(db: AsyncSession, project: Project, membership: Proj
         teamy_code=project.teamy_code,
         role=membership.role,
         member_count=await get_member_count(db, project.id),
+        archived_at=project.archived_at,
+        created_at=project.created_at,
+        updated_at=project.updated_at,
     )
+
+
+def require_project_leader(membership: ProjectMember) -> None:
+    if membership.role != "leader":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only workspace owners can perform this action")
+
+
+def require_project_active(project: Project) -> None:
+    if project.archived_at is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This workspace is archived and read-only")
 
 
 async def get_project_membership(
@@ -83,6 +97,9 @@ async def list_projects(user: Annotated[User, Depends(get_current_user)], db: As
             teamy_code=project.teamy_code,
             role=membership.role,
             member_count=int(member_count),
+            archived_at=project.archived_at,
+            created_at=project.created_at,
+            updated_at=project.updated_at,
         )
         for project, membership, member_count in result.all()
         if membership.user_id == user.id
@@ -148,3 +165,55 @@ async def get_project(
 ) -> ProjectResponse:
     project, project_member = membership
     return await serialize_project(db, project, project_member)
+
+
+@router.patch("/{project_id}", response_model=ProjectResponse)
+async def update_project(
+    payload: ProjectUpdateRequest,
+    membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
+    db: AsyncSession = Depends(get_db),
+) -> ProjectResponse:
+    project, project_member = membership
+    require_project_leader(project_member)
+
+    if payload.name is not None:
+        next_name = payload.name.strip()
+        if not next_name:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Workspace name is required")
+        project.name = next_name
+
+    await db.commit()
+    await db.refresh(project)
+    return await serialize_project(db, project, project_member)
+
+
+@router.post("/{project_id}/archive", response_model=ProjectResponse)
+async def archive_project(
+    payload: ProjectArchiveRequest,
+    membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
+    db: AsyncSession = Depends(get_db),
+) -> ProjectResponse:
+    project, project_member = membership
+    require_project_leader(project_member)
+    if payload.confirm_archive:
+        project.archived_at = project.archived_at or datetime.now(UTC)
+
+    await db.commit()
+    await db.refresh(project)
+    return await serialize_project(db, project, project_member)
+
+
+@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_project(
+    payload: ProjectDeleteRequest,
+    membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    project, project_member = membership
+    require_project_leader(project_member)
+    if payload.confirm_name != project.name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Workspace name confirmation did not match")
+
+    await db.delete(project)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -16,6 +16,16 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=128)
 
 
+class UserProfileUpdateRequest(BaseModel):
+    full_name: str | None = Field(default=None, min_length=1, max_length=160)
+    avatar_url: str | None = Field(default=None, max_length=1024)
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -38,6 +48,18 @@ class ProjectJoinRequest(BaseModel):
     teamy_code: str = Field(min_length=6, max_length=32)
 
 
+class ProjectUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+
+
+class ProjectArchiveRequest(BaseModel):
+    confirm_archive: Literal[True]
+
+
+class ProjectDeleteRequest(BaseModel):
+    confirm_name: str = Field(min_length=1, max_length=160)
+
+
 class ProjectResponse(BaseModel):
     id: UUID
     name: str
@@ -45,6 +67,9 @@ class ProjectResponse(BaseModel):
     teamy_code: str
     role: str
     member_count: int
+    archived_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class ProjectListResponse(BaseModel):

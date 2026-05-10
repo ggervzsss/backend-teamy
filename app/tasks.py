@@ -13,7 +13,7 @@ from app.database import get_db, SessionLocal
 from app.dependencies import get_current_user
 from app.html_sanitizer import sanitize_html
 from app.models import FileResource, Project, ProjectMember, Task, TaskAssignee, TaskFileLink, User
-from app.projects import get_project_membership
+from app.projects import get_project_membership, require_project_active
 from app.schemas import (
     FileResourceSummaryResponse,
     LinkedTaskResponse,
@@ -211,6 +211,7 @@ async def create_task(
     db: AsyncSession = Depends(get_db),
 ) -> TaskResponse:
     project, project_member = membership
+    require_project_active(project)
     require_leader(project_member)
 
     assignee_ids = list(dict.fromkeys(payload.assignee_ids))
@@ -269,6 +270,7 @@ async def update_my_task_status(
     db: AsyncSession = Depends(get_db),
 ) -> TaskResponse:
     project, _ = membership
+    require_project_active(project)
     task = await get_task_for_project(db, project.id, task_id)
     assignee_result = await db.execute(select(TaskAssignee).where(TaskAssignee.task_id == task.id, TaskAssignee.user_id == user.id))
     assignee = assignee_result.scalar_one_or_none()
@@ -296,6 +298,7 @@ async def review_task(
     db: AsyncSession = Depends(get_db),
 ) -> TaskResponse:
     project, project_member = membership
+    require_project_active(project)
     require_leader(project_member)
     task = await get_task_for_project(db, project.id, task_id)
     if task.status != "for_review":

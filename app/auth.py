@@ -11,7 +11,7 @@ from app.config import Settings, get_settings
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models import User
-from app.schemas import AuthResponse, LoginRequest, SignupRequest, UserResponse
+from app.schemas import AuthResponse, LoginRequest, PasswordChangeRequest, SignupRequest, UserProfileUpdateRequest, UserResponse
 from app.security import (
     clear_session_cookie,
     create_oauth_state,
@@ -75,6 +75,43 @@ async def logout(response: Response, settings: Settings = Depends(get_settings))
 @router.get("/me", response_model=AuthResponse)
 async def me(user: Annotated[User, Depends(get_current_user)]) -> AuthResponse:
     return AuthResponse(user=UserResponse.model_validate(user))
+
+
+@router.patch("/me", response_model=AuthResponse)
+async def update_me(
+    payload: UserProfileUpdateRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+) -> AuthResponse:
+    if payload.full_name is not None:
+        full_name = payload.full_name.strip()
+        if not full_name:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Full name is required")
+        user.full_name = full_name
+    if payload.avatar_url is not None:
+        avatar_url = payload.avatar_url.strip()
+        user.avatar_url = avatar_url or None
+
+    await db.commit()
+    await db.refresh(user)
+    return AuthResponse(user=UserResponse.model_validate(user))
+
+
+@router.patch("/me/password", status_code=status.HTTP_204_NO_CONTENT)
+async def change_my_password(
+    payload: PasswordChangeRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    if user.password_hash is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password changes are unavailable for this account")
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
+    if payload.current_password == payload.new_password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="New password must be different from the current password")
+
+    user.password_hash = hash_password(payload.new_password)
+    await db.commit()
 
 
 @router.get("/google/login")

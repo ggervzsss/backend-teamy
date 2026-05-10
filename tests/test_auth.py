@@ -44,6 +44,41 @@ async def test_invalid_login_is_rejected(client):
 
 
 @pytest.mark.asyncio
+async def test_update_me_changes_profile_fields(client):
+    await client.post(
+        "/auth/signup",
+        json={"full_name": "Jane Doe", "email": "jane@example.com", "password": "password123"},
+    )
+
+    response = await client.patch("/auth/me", json={"full_name": "Jane Rivera", "avatar_url": "https://example.com/jane.png"})
+    me_response = await client.get("/auth/me")
+
+    assert response.status_code == 200
+    assert response.json()["user"]["full_name"] == "Jane Rivera"
+    assert response.json()["user"]["avatar_url"] == "https://example.com/jane.png"
+    assert me_response.json()["user"]["full_name"] == "Jane Rivera"
+
+
+@pytest.mark.asyncio
+async def test_change_password_requires_current_password(client):
+    await client.post(
+        "/auth/signup",
+        json={"full_name": "Jane Doe", "email": "jane@example.com", "password": "password123"},
+    )
+
+    wrong_current = await client.patch("/auth/me/password", json={"current_password": "wrong-password", "new_password": "new-password123"})
+    changed = await client.patch("/auth/me/password", json={"current_password": "password123", "new_password": "new-password123"})
+    await client.post("/auth/logout")
+    old_login = await client.post("/auth/login", json={"email": "jane@example.com", "password": "password123"})
+    new_login = await client.post("/auth/login", json={"email": "jane@example.com", "password": "new-password123"})
+
+    assert wrong_current.status_code == 400
+    assert changed.status_code == 204
+    assert old_login.status_code == 401
+    assert new_login.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_google_login_redirects_to_google(client):
     response = await client.get("/auth/google/login", follow_redirects=False)
     assert response.status_code == 307

@@ -12,7 +12,7 @@ from app.config import get_settings
 from app.database import SessionLocal, get_db
 from app.dependencies import get_current_user
 from app.models import Announcement, AnnouncementRead, Project, ProjectMember, User
-from app.projects import get_project_membership
+from app.projects import get_project_membership, require_project_active
 from app.schemas import (
     AnnouncementCreateRequest,
     AnnouncementListResponse,
@@ -138,6 +138,7 @@ async def create_announcement(
     db: AsyncSession = Depends(get_db),
 ) -> AnnouncementResponse:
     project, _ = membership
+    require_project_active(project)
     title = payload.title.strip()
     body = payload.body.strip()
     if not title or not body:
@@ -170,6 +171,7 @@ async def get_announcement(
     db: AsyncSession = Depends(get_db),
 ) -> AnnouncementResponse:
     project, _ = membership
+    require_project_active(project)
     announcement = await get_announcement_for_project(db, project.id, announcement_id)
     was_created, read_at = await mark_announcement_read(db, announcement.id, user.id)
     await db.commit()

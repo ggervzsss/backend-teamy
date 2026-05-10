@@ -9,7 +9,7 @@ from app.database import get_db
 from app.dependencies import get_current_user
 from app.html_sanitizer import sanitize_html
 from app.models import FileResource, Project, ProjectMember, Task, TaskFileLink, User
-from app.projects import get_project_membership
+from app.projects import get_project_membership, require_project_active
 from app.schemas import (
     FileResourceCreateRequest,
     FileResourceListResponse,
@@ -92,6 +92,7 @@ async def create_file_resource(
     db: AsyncSession = Depends(get_db),
 ) -> FileResourceResponse:
     project, _ = membership
+    require_project_active(project)
     clean_url = validate_file_payload(payload.kind, payload.title, payload.url)
     resource = FileResource(
         project_id=project.id,
@@ -114,6 +115,7 @@ async def get_file_resource(
     db: AsyncSession = Depends(get_db),
 ) -> FileResourceResponse:
     project, _ = membership
+    require_project_active(project)
     resource = await get_file_for_project(db, project.id, file_id)
     return await serialize_file_resource(db, resource, include_content=True)  # type: ignore[return-value]
 

@@ -76,3 +76,44 @@ async def test_non_member_cannot_fetch_project(client):
     response = await client.get(f"/projects/{project_id}")
 
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_leader_can_rename_archive_and_delete_project(client):
+    await signup(client, "leader@example.com")
+    created = await client.post("/projects", json={"name": "Original Workspace"})
+    project_id = created.json()["id"]
+
+    renamed = await client.patch(f"/projects/{project_id}", json={"name": "Renamed Workspace"})
+    archived = await client.post(f"/projects/{project_id}/archive", json={"confirm_archive": True})
+    blocked_write = await client.post(f"/projects/{project_id}/announcements", json={"title": "Update", "body": "Archived now"})
+    deleted = await client.request("DELETE", f"/projects/{project_id}", json={"confirm_name": "Renamed Workspace"})
+    missing = await client.get(f"/projects/{project_id}")
+
+    assert renamed.status_code == 200
+    assert renamed.json()["name"] == "Renamed Workspace"
+    assert archived.status_code == 200
+    assert archived.json()["archived_at"] is not None
+    assert blocked_write.status_code == 409
+    assert deleted.status_code == 204
+    assert missing.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_member_cannot_manage_project_settings(client):
+    await signup(client, "leader@example.com")
+    created = await client.post("/projects", json={"name": "Owner Only"})
+    project_id = created.json()["id"]
+    teamy_code = created.json()["teamy_code"]
+    await client.post("/auth/logout")
+
+    await signup(client, "member@example.com")
+    await client.post("/projects/join", json={"teamy_code": teamy_code})
+
+    rename = await client.patch(f"/projects/{project_id}", json={"name": "Member Rename"})
+    archive = await client.post(f"/projects/{project_id}/archive", json={"confirm_archive": True})
+    delete = await client.request("DELETE", f"/projects/{project_id}", json={"confirm_name": "Owner Only"})
+
+    assert rename.status_code == 403
+    assert archive.status_code == 403
+    assert delete.status_code == 403
