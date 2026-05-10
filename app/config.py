@@ -2,6 +2,7 @@ from functools import lru_cache
 
 from pydantic import AnyHttpUrl, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import make_url
 
 
 class Settings(BaseSettings):
@@ -26,6 +27,31 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins_raw.split(",") if origin.strip()]
+
+    @property
+    def async_database_url(self) -> str:
+        url = make_url(self.database_url)
+        async_drivers = {
+            "mysql": "mysql+aiomysql",
+            "mysql+mysqldb": "mysql+aiomysql",
+            "mysql+pymysql": "mysql+aiomysql",
+        }
+        return url.set(drivername=async_drivers.get(url.drivername, url.drivername)).render_as_string(
+            hide_password=False
+        )
+
+    @property
+    def sync_database_url(self) -> str:
+        url = make_url(self.database_url)
+        sync_drivers = {
+            "mysql": "mysql+pymysql",
+            "mysql+mysqldb": "mysql+pymysql",
+            "mysql+aiomysql": "mysql+pymysql",
+            "mysql+asyncmy": "mysql+pymysql",
+        }
+        return url.set(drivername=sync_drivers.get(url.drivername, url.drivername)).render_as_string(
+            hide_password=False
+        )
 
 
 @lru_cache

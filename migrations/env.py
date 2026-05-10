@@ -2,7 +2,6 @@ from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
-from sqlalchemy.engine import make_url
 
 from app.config import get_settings
 from app.models import Base
@@ -16,13 +15,7 @@ target_metadata = Base.metadata
 
 
 def get_url() -> str:
-    url = make_url(get_settings().database_url)
-    sync_drivers = {
-        "mysql+aiomysql": "mysql+pymysql",
-        "mysql+asyncmy": "mysql+pymysql",
-    }
-    sync_driver = sync_drivers.get(url.drivername, url.drivername)
-    return url.set(drivername=sync_driver).render_as_string(hide_password=False)
+    return get_settings().sync_database_url
 
 
 def run_migrations_offline() -> None:
