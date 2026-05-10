@@ -1,0 +1,162 @@
+from typing import Annotated
+from urllib.parse import urlencode
+
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.responses import RedirectResponse
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import Settings, get_settings
+from app.database import get_db
+from app.dependencies import get_current_user
+from app.models import User
+from app.schemas import AuthResponse, LoginRequest, SignupRequest, UserResponse
+from app.security import (
+    clear_session_cookie,
+    create_oauth_state,
+    create_session_token,
+    decode_oauth_state,
+    hash_password,
+    set_session_cookie,
+    verify_password,
+)
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
+
+
+async def get_user_by_email(db: AsyncSession, email: str) -> User | None:
+    result = await db.execute(select(User).where(User.email == email.lower()))
+    return result.scalar_one_or_none()
+
+
+def issue_session(response: Response, user: User, settings: Settings) -> None:
+    set_session_cookie(response, create_session_token(user.id, settings), settings)
+
+
+@router.post("/signup", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
+async def signup(payload: SignupRequest, response: Response, db: AsyncSession = Depends(get_db), settings: Settings = Depends(get_settings)) -> AuthResponse:
+    email = payload.email.lower()
+    existing_user = await get_user_by_email(db, email)
+    if existing_user is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An account with this email already exists")
+
+    user = User(
+        email=email,
+        full_name=payload.full_name.strip(),
+        password_hash=hash_password(payload.password),
+        auth_provider="local",
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    issue_session(response, user, settings)
+    return AuthResponse(user=UserResponse.model_validate(user))
+
+
+@router.post("/login", response_model=AuthResponse)
+async def login(payload: LoginRequest, response: Response, db: AsyncSession = Depends(get_db), settings: Settings = Depends(get_settings)) -> AuthResponse:
+    user = await get_user_by_email(db, payload.email)
+    if user is None or user.password_hash is None or not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
+
+    issue_session(response, user, settings)
+    return AuthResponse(user=UserResponse.model_validate(user))
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(response: Response, settings: Settings = Depends(get_settings)) -> None:
+    clear_session_cookie(response, settings)
+
+
+@router.get("/me", response_model=AuthResponse)
+async def me(user: Annotated[User, Depends(get_current_user)]) -> AuthResponse:
+    return AuthResponse(user=UserResponse.model_validate(user))
+
+
+@router.get("/google/login")
+async def google_login(settings: Settings = Depends(get_settings)) -> RedirectResponse:
+    if not settings.google_client_id or not settings.google_client_secret:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Google authentication is not configured")
+
+    params = {
+        "client_id": settings.google_client_id,
+        "redirect_uri": settings.google_redirect_uri,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "access_type": "online",
+        "prompt": "select_account",
+        "state": create_oauth_state(settings),
+    }
+    return RedirectResponse(f"{GOOGLE_AUTH_URL}?{urlencode(params)}")
+
+
+@router.get("/google/callback")
+async def google_callback(
+    response: Response,
+    code: str = Query(...),
+    state: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> RedirectResponse:
+    next_path = decode_oauth_state(state, settings)
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        token_response = await client.post(
+            GOOGLE_TOKEN_URL,
+            data={
+                "code": code,
+                "client_id": settings.google_client_id,
+                "client_secret": settings.google_client_secret,
+                "redirect_uri": settings.google_redirect_uri,
+                "grant_type": "authorization_code",
+            },
+            headers={"Accept": "application/json"},
+        )
+        if token_response.status_code >= 400:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Google token exchange failed")
+
+        access_token = token_response.json().get("access_token")
+        if not access_token:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Google did not return an access token")
+
+        userinfo_response = await client.get(GOOGLE_USERINFO_URL, headers={"Authorization": f"Bearer {access_token}"})
+        if userinfo_response.status_code >= 400:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Google profile lookup failed")
+
+    profile = userinfo_response.json()
+    email = str(profile.get("email") or "").lower()
+    subject = str(profile.get("sub") or "")
+    full_name = str(profile.get("name") or email.split("@")[0])
+    avatar_url = profile.get("picture")
+
+    if not email or not subject:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Google profile is missing required fields")
+
+    user = await get_user_by_email(db, email)
+    if user is None:
+        user = User(
+            email=email,
+            full_name=full_name,
+            password_hash=None,
+            auth_provider="google",
+            provider_subject=subject,
+            avatar_url=avatar_url,
+        )
+        db.add(user)
+    else:
+        user.full_name = user.full_name or full_name
+        user.provider_subject = user.provider_subject or subject
+        user.avatar_url = avatar_url or user.avatar_url
+        if user.auth_provider == "local":
+            user.auth_provider = "local_google"
+
+    await db.commit()
+    await db.refresh(user)
+
+    redirect = RedirectResponse(f"{str(settings.frontend_url).rstrip('/')}{next_path}")
+    issue_session(redirect, user, settings)
+    return redirect
