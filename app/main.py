@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.announcements import router as announcements_router
 from app.auth import router as auth_router
 from app.config import get_settings
 from app.filehub import router as filehub_router
@@ -24,6 +25,7 @@ def create_app() -> FastAPI:
     app.include_router(projects_router)
     app.include_router(filehub_router)
     app.include_router(tasks_router)
+    app.include_router(announcements_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

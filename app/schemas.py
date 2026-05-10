@@ -145,6 +145,36 @@ class TaskSocketTicketResponse(BaseModel):
     ticket: str
 
 
+class AnnouncementCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    body: str = Field(min_length=1, max_length=4000)
+    is_pinned: bool = False
+
+
+class AnnouncementPinRequest(BaseModel):
+    is_pinned: bool
+
+
+class AnnouncementResponse(BaseModel):
+    id: UUID
+    project_id: UUID
+    title: str
+    body: str
+    is_pinned: bool
+    is_read: bool
+    created_by: UserResponse
+    created_at: datetime
+    updated_at: datetime
+
+
+class AnnouncementListResponse(BaseModel):
+    announcements: list[AnnouncementResponse]
+
+
+class AnnouncementSocketTicketResponse(BaseModel):
+    ticket: str
+
+
 class TaskCreateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=4000)

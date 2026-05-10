@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Date, DateTime, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -100,3 +100,26 @@ class TaskFileLink(Base):
     task_id: Mapped[UUID] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
     file_resource_id: Mapped[UUID] = mapped_column(ForeignKey("file_resources.id", ondelete="CASCADE"), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class Announcement(Base):
+    __tablename__ = "announcements"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    is_pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    created_by_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class AnnouncementRead(Base):
+    __tablename__ = "announcement_reads"
+    __table_args__ = (UniqueConstraint("announcement_id", "user_id", name="uq_announcement_reads_announcement_user"),)
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    announcement_id: Mapped[UUID] = mapped_column(ForeignKey("announcements.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    read_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
