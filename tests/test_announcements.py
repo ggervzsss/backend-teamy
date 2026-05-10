@@ -45,13 +45,14 @@ async def test_project_members_can_create_and_list_announcements(client):
 
     created = await client.post(
         f"/projects/{project['id']}/announcements",
-        json={"title": "Sprint demo", "body": "Demo starts at 3 PM.", "is_pinned": True},
+        json={"title": "Sprint demo", "body": "Demo starts at 3 PM.", "is_pinned": True, "deadline_date": "2026-05-20"},
     )
 
     assert created.status_code == 201
     body = created.json()
     assert body["title"] == "Sprint demo"
     assert body["is_pinned"] is True
+    assert body["deadline_date"] == "2026-05-20"
     assert body["is_read"] is True
     assert body["created_by"]["id"] == member["id"]
 
@@ -122,20 +123,22 @@ async def test_creator_or_leader_can_edit_announcement(client):
 
     creator_update = await client.patch(
         f"/projects/{project['id']}/announcements/{announcement_id}",
-        json={"title": "Updated note", "body": "Published note.", "is_pinned": True},
+        json={"title": "Updated note", "body": "Published note.", "is_pinned": True, "deadline_date": "2026-05-21"},
     )
     assert creator_update.status_code == 200
     assert creator_update.json()["title"] == "Updated note"
     assert creator_update.json()["is_pinned"] is True
+    assert creator_update.json()["deadline_date"] == "2026-05-21"
     await logout(client)
 
     await login(client, leader["email"])
     leader_update = await client.patch(
         f"/projects/{project['id']}/announcements/{announcement_id}",
-        json={"body": "Leader clarified note."},
+        json={"body": "Leader clarified note.", "deadline_date": None},
     )
     assert leader_update.status_code == 200
     assert leader_update.json()["body"] == "Leader clarified note."
+    assert leader_update.json()["deadline_date"] is None
 
 
 @pytest.mark.asyncio

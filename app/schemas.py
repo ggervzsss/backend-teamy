@@ -191,12 +191,14 @@ class AnnouncementCreateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     body: str = Field(min_length=1, max_length=4000)
     is_pinned: bool = False
+    deadline_date: date | None = None
 
 
 class AnnouncementUpdateRequest(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     body: str | None = Field(default=None, min_length=1, max_length=4000)
     is_pinned: bool | None = None
+    deadline_date: date | None = None
 
 
 class AnnouncementPinRequest(BaseModel):
@@ -209,6 +211,7 @@ class AnnouncementResponse(BaseModel):
     title: str
     body: str
     is_pinned: bool
+    deadline_date: date | None = None
     is_read: bool
     created_by: UserResponse
     created_at: datetime

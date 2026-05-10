@@ -89,6 +89,7 @@ async def serialize_announcement(db: AsyncSession, announcement: Announcement, u
         title=announcement.title,
         body=announcement.body,
         is_pinned=announcement.is_pinned,
+        deadline_date=announcement.deadline_date,
         is_read=await has_read_announcement(db, announcement.id, user_id) if is_read is None else is_read,
         created_by=UserResponse.model_validate(creator),
         created_at=announcement.created_at,
@@ -155,6 +156,7 @@ async def create_announcement(
         title=title,
         body=body,
         is_pinned=payload.is_pinned,
+        deadline_date=payload.deadline_date,
         created_by_user_id=user.id,
     )
     db.add(announcement)
@@ -194,6 +196,8 @@ async def update_announcement(
         announcement.body = body
     if payload.is_pinned is not None:
         announcement.is_pinned = payload.is_pinned
+    if "deadline_date" in payload.model_fields_set:
+        announcement.deadline_date = payload.deadline_date
 
     await db.commit()
     await db.refresh(announcement)
