@@ -108,6 +108,113 @@ async def test_avatar_upload_and_restore_delete_cloudinary_asset(client, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_google_login_preserves_custom_cloudinary_avatar(client, monkeypatch):
+    class FakeResponse:
+        def __init__(self, payload, status_code=200):
+            self._payload = payload
+            self.status_code = status_code
+
+        def json(self):
+            return self._payload
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, data=None, headers=None):
+            return FakeResponse({"access_token": "google-access-token"})
+
+        async def get(self, url, headers=None):
+            return FakeResponse(
+                {
+                    "sub": "google-subject",
+                    "email": "google@example.com",
+                    "name": "Google User",
+                    "picture": "https://example.com/google-avatar.png",
+                }
+            )
+
+    async def fake_upload(settings, user_id, file):
+        return "https://res.cloudinary.test/custom-avatar.jpg", f"teamy/avatars/{user_id}"
+
+    monkeypatch.setattr("app.auth.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("app.auth.upload_profile_avatar", fake_upload)
+
+    state = create_oauth_state(Settings(secret_key="test-secret-key-that-is-long-enough"))
+    assert (await client.get(f"/auth/google/callback?code=test-code&state={state}", follow_redirects=False)).status_code == 307
+    assert (await client.post("/auth/me/avatar", files={"file": ("avatar.png", b"image-bytes", "image/png")})).status_code == 200
+    await client.post("/auth/logout")
+    assert (await client.get(f"/auth/google/callback?code=test-code&state={state}", follow_redirects=False)).status_code == 307
+
+    me_response = await client.get("/auth/me")
+
+    assert me_response.status_code == 200
+    assert me_response.json()["user"]["avatar_url"] == "https://res.cloudinary.test/custom-avatar.jpg"
+    assert me_response.json()["user"]["google_avatar_url"] == "https://example.com/google-avatar.png"
+
+
+@pytest.mark.asyncio
+async def test_restore_google_avatar_replaces_custom_cloudinary_avatar(client, monkeypatch):
+    class FakeResponse:
+        def __init__(self, payload, status_code=200):
+            self._payload = payload
+            self.status_code = status_code
+
+        def json(self):
+            return self._payload
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, data=None, headers=None):
+            return FakeResponse({"access_token": "google-access-token"})
+
+        async def get(self, url, headers=None):
+            return FakeResponse(
+                {
+                    "sub": "google-subject",
+                    "email": "google@example.com",
+                    "name": "Google User",
+                    "picture": "https://example.com/google-avatar.png",
+                }
+            )
+
+    deleted_public_ids = []
+
+    async def fake_upload(settings, user_id, file):
+        return "https://res.cloudinary.test/custom-avatar.jpg", f"teamy/avatars/{user_id}"
+
+    async def fake_delete(settings, public_id):
+        deleted_public_ids.append(public_id)
+
+    monkeypatch.setattr("app.auth.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("app.auth.upload_profile_avatar", fake_upload)
+    monkeypatch.setattr("app.auth.delete_profile_avatar", fake_delete)
+
+    state = create_oauth_state(Settings(secret_key="test-secret-key-that-is-long-enough"))
+    assert (await client.get(f"/auth/google/callback?code=test-code&state={state}", follow_redirects=False)).status_code == 307
+    assert (await client.post("/auth/me/avatar", files={"file": ("avatar.png", b"image-bytes", "image/png")})).status_code == 200
+    restore_response = await client.post("/auth/me/avatar/google")
+
+    assert restore_response.status_code == 200
+    assert restore_response.json()["user"]["avatar_url"] == "https://example.com/google-avatar.png"
+    assert deleted_public_ids
+
+
+@pytest.mark.asyncio
 async def test_change_password_requires_current_password(client):
     await client.post(
         "/auth/signup",

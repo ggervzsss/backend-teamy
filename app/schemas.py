@@ -34,6 +34,7 @@ class UserResponse(BaseModel):
     full_name: str
     username: str | None = None
     avatar_url: str | None = None
+    google_avatar_url: str | None = None
 
 
 class AuthResponse(BaseModel):

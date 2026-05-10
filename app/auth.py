@@ -150,6 +150,26 @@ async def delete_my_avatar(
     return AuthResponse(user=UserResponse.model_validate(user))
 
 
+@router.post("/me/avatar/google", response_model=AuthResponse)
+async def restore_my_google_avatar(
+    user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> AuthResponse:
+    if not user.google_avatar_url:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No Google profile picture is available for this account")
+
+    public_id = user.cloudinary_avatar_public_id
+    if public_id:
+        await delete_profile_avatar(settings, public_id)
+
+    user.avatar_url = user.google_avatar_url
+    user.cloudinary_avatar_public_id = None
+    await db.commit()
+    await db.refresh(user)
+    return AuthResponse(user=UserResponse.model_validate(user))
+
+
 @router.patch("/me/password", status_code=status.HTTP_204_NO_CONTENT)
 async def change_my_password(
     payload: PasswordChangeRequest,
@@ -221,7 +241,7 @@ async def google_callback(
     email = str(profile.get("email") or "").lower()
     subject = str(profile.get("sub") or "")
     full_name = str(profile.get("name") or email.split("@")[0])
-    avatar_url = profile.get("picture")
+    google_avatar_url = profile.get("picture")
 
     if not email or not subject:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Google profile is missing required fields")
@@ -234,13 +254,14 @@ async def google_callback(
             password_hash=None,
             auth_provider="google",
             provider_subject=subject,
-            avatar_url=avatar_url,
+            avatar_url=google_avatar_url,
+            google_avatar_url=google_avatar_url,
         )
         db.add(user)
     else:
         user.full_name = user.full_name or full_name
         user.provider_subject = user.provider_subject or subject
-        user.avatar_url = avatar_url or user.avatar_url
+        user.google_avatar_url = google_avatar_url or user.google_avatar_url
         if user.auth_provider == "local":
             user.auth_provider = "local_google"
 
