@@ -25,9 +25,10 @@ from app.schemas import (
     TaskListResponse,
     TaskResponse,
     TaskReviewRequest,
+    TaskSocketTicketResponse,
     UserResponse,
 )
-from app.security import decode_session_token
+from app.security import create_task_socket_ticket, decode_session_token, decode_task_socket_ticket
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["tasks"])
 
@@ -192,6 +193,16 @@ async def list_tasks(
     return TaskListResponse(tasks=tasks)
 
 
+@router.get("/tasks/ws-ticket", response_model=TaskSocketTicketResponse)
+async def create_task_socket_ticket_endpoint(
+    user: Annotated[User, Depends(get_current_user)],
+    membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
+    settings=Depends(get_settings),
+) -> TaskSocketTicketResponse:
+    project, _ = membership
+    return TaskSocketTicketResponse(ticket=create_task_socket_ticket(user.id, project.id, settings))
+
+
 @router.post("/tasks", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
 async def create_task(
     payload: TaskCreateRequest,
@@ -313,20 +324,37 @@ async def review_task(
 @router.websocket("/tasks/ws")
 async def task_updates(websocket: WebSocket, project_id: UUID) -> None:
     settings = get_settings()
-    session_cookie = websocket.cookies.get(settings.session_cookie_name)
-    if not session_cookie:
-        await websocket.close(code=1008)
-        return
+    ticket = websocket.query_params.get("ticket")
 
-    try:
-        user_id = decode_session_token(session_cookie, settings)
-    except HTTPException:
-        await websocket.close(code=1008)
-        return
+    if ticket:
+        try:
+            user_id, ticket_project_id = decode_task_socket_ticket(ticket, settings)
+        except HTTPException:
+            await websocket.accept()
+            await websocket.close(code=1008)
+            return
+        if ticket_project_id != project_id:
+            await websocket.accept()
+            await websocket.close(code=1008)
+            return
+    else:
+        session_cookie = websocket.cookies.get(settings.session_cookie_name)
+        if not session_cookie:
+            await websocket.accept()
+            await websocket.close(code=1008)
+            return
+
+        try:
+            user_id = decode_session_token(session_cookie, settings)
+        except HTTPException:
+            await websocket.accept()
+            await websocket.close(code=1008)
+            return
 
     async with SessionLocal() as db:
         result = await db.execute(select(ProjectMember).where(ProjectMember.project_id == project_id, ProjectMember.user_id == user_id))
         if result.scalar_one_or_none() is None:
+            await websocket.accept()
             await websocket.close(code=1008)
             return
 

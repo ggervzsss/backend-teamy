@@ -41,6 +41,31 @@ def decode_session_token(token: str, settings: Settings) -> UUID:
     return UUID(payload["sub"])
 
 
+def create_task_socket_ticket(user_id: UUID, project_id: UUID, settings: Settings) -> str:
+    now = datetime.now(UTC)
+    payload = {
+        "sub": str(user_id),
+        "project_id": str(project_id),
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(seconds=60)).timestamp()),
+        "typ": "task_socket",
+    }
+    return jwt.encode(payload, settings.secret_key, algorithm=ALGORITHM)
+
+
+def decode_task_socket_ticket(ticket: str, settings: Settings) -> tuple[UUID, UUID]:
+    try:
+        payload = jwt.decode(ticket, settings.secret_key, algorithms=[ALGORITHM])
+        user_id = UUID(payload["sub"])
+        project_id = UUID(payload["project_id"])
+    except (KeyError, ValueError, jwt.PyJWTError) as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid task socket ticket") from exc
+
+    if payload.get("typ") != "task_socket":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid task socket ticket")
+    return user_id, project_id
+
+
 def set_session_cookie(response: Response, token: str, settings: Settings) -> None:
     response.set_cookie(
         key=settings.session_cookie_name,

@@ -68,6 +68,18 @@ async def test_leader_can_create_task_assigned_to_multiple_members(client):
 
 
 @pytest.mark.asyncio
+async def test_project_member_can_request_task_socket_ticket(client):
+    project, _, member_one, _ = await setup_project_with_members(client)
+    await logout(client)
+    await login(client, member_one["email"])
+
+    response = await client.get(f"/projects/{project['id']}/tasks/ws-ticket")
+
+    assert response.status_code == 200
+    assert response.json()["ticket"]
+
+
+@pytest.mark.asyncio
 async def test_non_leader_cannot_create_or_review_tasks(client):
     project, _, member_one, _ = await setup_project_with_members(client)
     await logout(client)

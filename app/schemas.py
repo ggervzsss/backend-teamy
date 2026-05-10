@@ -141,6 +141,10 @@ class TaskListResponse(BaseModel):
     tasks: list[TaskResponse]
 
 
+class TaskSocketTicketResponse(BaseModel):
+    ticket: str
+
+
 class TaskCreateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=4000)
