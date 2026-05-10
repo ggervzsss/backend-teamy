@@ -94,7 +94,7 @@ async def test_non_leader_cannot_create_or_review_tasks(client):
 
 
 @pytest.mark.asyncio
-async def test_member_completion_moves_to_review_only_after_all_assignees_finish(client):
+async def test_member_readiness_requires_explicit_submit_for_review(client):
     project, leader, member_one, member_two = await setup_project_with_members(client)
     created = await client.post(
         f"/projects/{project['id']}/tasks",
@@ -104,15 +104,20 @@ async def test_member_completion_moves_to_review_only_after_all_assignees_finish
     await logout(client)
 
     await login(client, member_one["email"])
-    first_update = await client.patch(f"/projects/{project['id']}/tasks/{task_id}/assignees/me", json={"status": "done"})
+    first_update = await client.patch(f"/projects/{project['id']}/tasks/{task_id}/assignees/me", json={"status": "ready_for_review"})
     assert first_update.status_code == 200
     assert first_update.json()["status"] == "in_progress"
+    early_submit = await client.post(f"/projects/{project['id']}/tasks/{task_id}/submit-review")
+    assert early_submit.status_code == 400
     await logout(client)
 
     await login(client, member_two["email"])
-    second_update = await client.patch(f"/projects/{project['id']}/tasks/{task_id}/assignees/me", json={"status": "done"})
+    second_update = await client.patch(f"/projects/{project['id']}/tasks/{task_id}/assignees/me", json={"status": "ready_for_review"})
     assert second_update.status_code == 200
-    assert second_update.json()["status"] == "for_review"
+    assert second_update.json()["status"] == "in_progress"
+    submitted = await client.post(f"/projects/{project['id']}/tasks/{task_id}/submit-review")
+    assert submitted.status_code == 200
+    assert submitted.json()["status"] == "for_review"
     await logout(client)
 
     await login(client, leader["email"])
@@ -133,17 +138,19 @@ async def test_request_changes_resets_assignees_to_progress(client):
     await logout(client)
 
     await login(client, member_one["email"])
-    await client.patch(f"/projects/{project['id']}/tasks/{task_id}/assignees/me", json={"status": "done"})
+    await client.patch(f"/projects/{project['id']}/tasks/{task_id}/assignees/me", json={"status": "ready_for_review"})
     await logout(client)
     await login(client, member_two["email"])
-    await client.patch(f"/projects/{project['id']}/tasks/{task_id}/assignees/me", json={"status": "done"})
+    await client.patch(f"/projects/{project['id']}/tasks/{task_id}/assignees/me", json={"status": "ready_for_review"})
+    await client.post(f"/projects/{project['id']}/tasks/{task_id}/submit-review")
     await logout(client)
 
     await login(client, leader["email"])
-    reviewed = await client.post(f"/projects/{project['id']}/tasks/{task_id}/review", json={"action": "request_changes"})
+    reviewed = await client.post(f"/projects/{project['id']}/tasks/{task_id}/review", json={"action": "request_changes", "remarks": "Please tighten the conclusion."})
 
     assert reviewed.status_code == 200
     body = reviewed.json()
     assert body["status"] == "in_progress"
     assert {assignee["status"] for assignee in body["assignees"]} == {"in_progress"}
     assert all(assignee["completed_at"] is None for assignee in body["assignees"])
+    assert body["review_remarks"] == "Please tighten the conclusion."

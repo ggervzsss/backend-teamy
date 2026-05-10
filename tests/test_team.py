@@ -50,6 +50,22 @@ async def test_project_member_can_request_team_socket_ticket(client):
 
 
 @pytest.mark.asyncio
+async def test_project_member_can_list_presence_roster(client):
+    project, member = await setup_project(client)
+    await logout(client)
+    await login(client, member["email"])
+
+    response = await client.get(f"/projects/{project['id']}/members/presence")
+
+    assert response.status_code == 200
+    members = response.json()["members"]
+    assert len(members) == 2
+    assert {roster_member["user"]["email"] for roster_member in members} == {"team-leader@example.com", "team-member@example.com"}
+    assert all(roster_member["is_online"] is False for roster_member in members)
+    assert all("last_online_at" in roster_member for roster_member in members)
+
+
+@pytest.mark.asyncio
 async def test_non_members_cannot_request_team_socket_ticket(client):
     project, _ = await setup_project(client)
     await logout(client)

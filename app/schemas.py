@@ -35,6 +35,7 @@ class UserResponse(BaseModel):
     username: str | None = None
     avatar_url: str | None = None
     google_avatar_url: str | None = None
+    last_online_at: datetime | None = None
 
 
 class AuthResponse(BaseModel):
@@ -80,7 +81,7 @@ class ProjectListResponse(BaseModel):
 
 TaskStatus = Literal["todo", "in_progress", "for_review", "done"]
 TaskPriority = Literal["low", "medium", "high"]
-AssigneeStatus = Literal["todo", "in_progress", "done"]
+AssigneeStatus = Literal["todo", "in_progress", "ready_for_review"]
 FileResourceKind = Literal["doc", "link"]
 
 
@@ -93,6 +94,15 @@ class ProjectMemberResponse(BaseModel):
 
 class ProjectMemberListResponse(BaseModel):
     members: list[ProjectMemberResponse]
+
+
+class ProjectMemberPresenceResponse(ProjectMemberResponse):
+    is_online: bool
+    last_online_at: datetime | None = None
+
+
+class ProjectPresenceResponse(BaseModel):
+    members: list[ProjectMemberPresenceResponse]
 
 
 class TeamSocketTicketResponse(BaseModel):
@@ -162,6 +172,7 @@ class TaskResponse(BaseModel):
     created_by: UserResponse
     reviewed_by: UserResponse | None = None
     reviewed_at: datetime | None = None
+    review_remarks: str | None = None
     assignees: list[TaskAssigneeResponse]
     linked_files: list[FileResourceSummaryResponse] = []
     created_at: datetime
@@ -217,8 +228,9 @@ class TaskCreateRequest(BaseModel):
 
 
 class TaskAssigneeUpdateRequest(BaseModel):
-    status: Literal["in_progress", "done"]
+    status: Literal["in_progress", "ready_for_review"]
 
 
 class TaskReviewRequest(BaseModel):
     action: Literal["approve", "request_changes"]
+    remarks: str | None = Field(default=None, max_length=4000)

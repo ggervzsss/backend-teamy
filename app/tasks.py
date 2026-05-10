@@ -129,6 +129,7 @@ async def serialize_task(db: AsyncSession, task: Task) -> TaskResponse:
         created_by=UserResponse.model_validate(creator),
         reviewed_by=UserResponse.model_validate(reviewed_by) if reviewed_by else None,
         reviewed_at=task.reviewed_at,
+        review_remarks=task.review_remarks,
         assignees=assignees,
         linked_files=await serialize_task_linked_files(db, task),
         created_at=task.created_at,
@@ -147,9 +148,7 @@ async def get_task_for_project(db: AsyncSession, project_id: UUID, task_id: UUID
 async def move_task_after_assignee_update(db: AsyncSession, task: Task) -> None:
     assignee_result = await db.execute(select(TaskAssignee).where(TaskAssignee.task_id == task.id))
     assignees = list(assignee_result.scalars().all())
-    if assignees and all(assignee.status == "done" for assignee in assignees):
-        task.status = "for_review"
-    elif any(assignee.status == "in_progress" for assignee in assignees):
+    if any(assignee.status in {"in_progress", "ready_for_review"} for assignee in assignees):
         task.status = "in_progress"
     else:
         task.status = "todo"
@@ -278,14 +277,48 @@ async def update_my_task_status(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only assigned members can update this task")
     if task.status == "done":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Done tasks cannot be updated")
+    if task.status == "for_review":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tasks in review cannot be updated until changes are requested")
 
     assignee.status = payload.status
-    assignee.completed_at = datetime.now(UTC) if payload.status == "done" else None
+    assignee.completed_at = datetime.now(UTC) if payload.status == "ready_for_review" else None
     await move_task_after_assignee_update(db, task)
     await db.commit()
     await db.refresh(task)
     response = await serialize_task(db, task)
     await manager.broadcast(project.id, "task.updated", response)
+    return response
+
+
+@router.post("/tasks/{task_id}/submit-review", response_model=TaskResponse)
+async def submit_task_for_review(
+    task_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
+    db: AsyncSession = Depends(get_db),
+) -> TaskResponse:
+    project, _ = membership
+    require_project_active(project)
+    task = await get_task_for_project(db, project.id, task_id)
+    if task.status == "done":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Done tasks cannot be submitted for review")
+    if task.status == "for_review":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Task is already for review")
+
+    assignee_result = await db.execute(select(TaskAssignee).where(TaskAssignee.task_id == task.id))
+    assignees = list(assignee_result.scalars().all())
+    if not any(assignee.user_id == user.id for assignee in assignees):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only assigned members can submit this task for review")
+    if not assignees or any(assignee.status != "ready_for_review" for assignee in assignees):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Every assignee must be ready for review first")
+
+    task.status = "for_review"
+    task.reviewed_by_user_id = None
+    task.reviewed_at = None
+    await db.commit()
+    await db.refresh(task)
+    response = await serialize_task(db, task)
+    await manager.broadcast(project.id, "task.submitted", response)
     return response
 
 
@@ -308,10 +341,12 @@ async def review_task(
         task.status = "done"
         task.reviewed_by_user_id = user.id
         task.reviewed_at = datetime.now(UTC)
+        task.review_remarks = None
     else:
         task.status = "in_progress"
         task.reviewed_by_user_id = None
         task.reviewed_at = None
+        task.review_remarks = payload.remarks.strip() if payload.remarks else None
         assignee_result = await db.execute(select(TaskAssignee).where(TaskAssignee.task_id == task.id))
         for assignee in assignee_result.scalars().all():
             assignee.status = "in_progress"
