@@ -63,7 +63,7 @@ def clear_session_cookie(response: Response, settings: Settings) -> None:
     )
 
 
-def create_oauth_state(settings: Settings, next_path: str = "/dashboard") -> str:
+def create_oauth_state(settings: Settings, next_path: str = "/projects") -> str:
     now = datetime.now(UTC)
     payload = {
         "typ": "google_oauth_state",

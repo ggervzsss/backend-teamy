@@ -25,3 +25,25 @@ class UserResponse(BaseModel):
 
 class AuthResponse(BaseModel):
     user: UserResponse
+
+
+class ProjectCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=2000)
+
+
+class ProjectJoinRequest(BaseModel):
+    teamy_code: str = Field(min_length=6, max_length=32)
+
+
+class ProjectResponse(BaseModel):
+    id: UUID
+    name: str
+    description: str | None = None
+    teamy_code: str
+    role: str
+    member_count: int
+
+
+class ProjectListResponse(BaseModel):
+    projects: list[ProjectResponse]

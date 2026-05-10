@@ -95,7 +95,7 @@ async def test_google_callback_creates_user(client, monkeypatch):
     response = await client.get(f"/auth/google/callback?code=test-code&state={state}", follow_redirects=False)
 
     assert response.status_code == 307
-    assert response.headers["location"] == "http://localhost:5173/dashboard"
+    assert response.headers["location"] == "http://localhost:5173/projects"
     assert "teamy_session" in client.cookies
 
     me_response = await client.get("/auth/me")
