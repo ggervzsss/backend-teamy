@@ -1,8 +1,9 @@
 from functools import lru_cache
+import ssl
 
 from pydantic import AnyHttpUrl, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine import URL, make_url
 
 
 class Settings(BaseSettings):
@@ -23,10 +24,43 @@ class Settings(BaseSettings):
     cloudinary_api_key: str = ""
     cloudinary_api_secret: str = ""
     cloudinary_secure: bool = True
+    database_ssl: bool = False
+    database_ssl_verify: bool = True
+    database_ssl_ca: str | None = None
 
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins_raw.split(",") if origin.strip()]
+
+    def _database_url_for_driver(self, drivername: str) -> URL:
+        url = make_url(self.database_url)
+        query = dict(url.query)
+        for key in ("ssl", "sslmode", "ssl_mode", "ssl-mode", "ssl_ca", "ssl_verify_cert", "ssl_verify_identity"):
+            query.pop(key, None)
+        return url.set(drivername=drivername, query=query)
+
+    @property
+    def database_ssl_enabled(self) -> bool:
+        url = make_url(self.database_url)
+        query = url.query
+        ssl_mode = str(query.get("ssl") or query.get("sslmode") or query.get("ssl_mode") or query.get("ssl-mode") or "").lower()
+        return self.database_ssl or ssl_mode in {"1", "true", "yes", "require", "required", "verify-ca", "verify_identity", "verify-identity"}
+
+    @property
+    def database_connect_args(self) -> dict:
+        if not self.database_ssl_enabled:
+            return {}
+
+        query = make_url(self.database_url).query
+        ca_file = query.get("ssl_ca") or self.database_ssl_ca
+        verify_cert = str(query.get("ssl_verify_cert", self.database_ssl_verify)).lower() not in {"0", "false", "no"}
+        context = ssl.create_default_context(cafile=ca_file)
+        if not verify_cert:
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+        elif str(query.get("ssl_verify_identity", "true")).lower() in {"0", "false", "no"}:
+            context.check_hostname = False
+        return {"ssl": context}
 
     @property
     def async_database_url(self) -> str:
@@ -36,7 +70,7 @@ class Settings(BaseSettings):
             "mysql+mysqldb": "mysql+aiomysql",
             "mysql+pymysql": "mysql+aiomysql",
         }
-        return url.set(drivername=async_drivers.get(url.drivername, url.drivername)).render_as_string(
+        return self._database_url_for_driver(async_drivers.get(url.drivername, url.drivername)).render_as_string(
             hide_password=False
         )
 
@@ -49,7 +83,7 @@ class Settings(BaseSettings):
             "mysql+aiomysql": "mysql+pymysql",
             "mysql+asyncmy": "mysql+pymysql",
         }
-        return url.set(drivername=sync_drivers.get(url.drivername, url.drivername)).render_as_string(
+        return self._database_url_for_driver(sync_drivers.get(url.drivername, url.drivername)).render_as_string(
             hide_password=False
         )
 
