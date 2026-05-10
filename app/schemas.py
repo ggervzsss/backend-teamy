@@ -68,6 +68,10 @@ class ProjectMemberListResponse(BaseModel):
     members: list[ProjectMemberResponse]
 
 
+class TeamSocketTicketResponse(BaseModel):
+    ticket: str
+
+
 class TaskAssigneeResponse(BaseModel):
     id: UUID
     user: UserResponse

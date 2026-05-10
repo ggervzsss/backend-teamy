@@ -10,6 +10,7 @@ from app.database import get_db
 from app.dependencies import get_current_user
 from app.models import Project, ProjectMember, User
 from app.schemas import ProjectCreateRequest, ProjectJoinRequest, ProjectListResponse, ProjectResponse
+from app.team_realtime import broadcast_member_joined
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -126,11 +127,16 @@ async def join_project(
 
     member_result = await db.execute(select(ProjectMember).where(ProjectMember.project_id == project.id, ProjectMember.user_id == user.id))
     membership = member_result.scalar_one_or_none()
+    is_new_member = False
     if membership is None:
         membership = ProjectMember(project_id=project.id, user_id=user.id, role="member")
         db.add(membership)
         await db.commit()
         await db.refresh(membership)
+        is_new_member = True
+
+    if is_new_member:
+        await broadcast_member_joined(db, project.id, membership)
 
     return await serialize_project(db, project, membership)
 

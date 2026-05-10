@@ -6,6 +6,7 @@ from app.auth import router as auth_router
 from app.config import get_settings
 from app.filehub import router as filehub_router
 from app.projects import router as projects_router
+from app.team import router as team_router
 from app.tasks import router as tasks_router
 
 
@@ -26,6 +27,7 @@ def create_app() -> FastAPI:
     app.include_router(filehub_router)
     app.include_router(tasks_router)
     app.include_router(announcements_router)
+    app.include_router(team_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
