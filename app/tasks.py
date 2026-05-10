@@ -11,9 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import get_db, SessionLocal
 from app.dependencies import get_current_user
-from app.models import Project, ProjectMember, Task, TaskAssignee, User
+from app.html_sanitizer import sanitize_html
+from app.models import FileResource, Project, ProjectMember, Task, TaskAssignee, TaskFileLink, User
 from app.projects import get_project_membership
 from app.schemas import (
+    FileResourceSummaryResponse,
+    LinkedTaskResponse,
     ProjectMemberListResponse,
     ProjectMemberResponse,
     TaskAssigneeResponse,
@@ -68,6 +71,31 @@ async def get_project_member_user_ids(db: AsyncSession, project_id: UUID) -> set
     return set(result.scalars().all())
 
 
+async def serialize_task_linked_files(db: AsyncSession, task: Task) -> list[FileResourceSummaryResponse]:
+    result = await db.execute(
+        select(FileResource, User)
+        .join(TaskFileLink, TaskFileLink.file_resource_id == FileResource.id)
+        .join(User, User.id == FileResource.created_by_user_id)
+        .where(TaskFileLink.task_id == task.id)
+        .order_by(FileResource.updated_at.desc(), FileResource.created_at.desc())
+    )
+    linked_task = LinkedTaskResponse(id=task.id, title=task.title, status=task.status)
+    return [
+        FileResourceSummaryResponse(
+            id=resource.id,
+            project_id=resource.project_id,
+            title=resource.title,
+            kind=resource.kind,
+            url=resource.url,
+            created_by=UserResponse.model_validate(creator),
+            linked_tasks=[linked_task],
+            created_at=resource.created_at,
+            updated_at=resource.updated_at,
+        )
+        for resource, creator in result.all()
+    ]
+
+
 async def serialize_task(db: AsyncSession, task: Task) -> TaskResponse:
     creator = await db.get(User, task.created_by_user_id)
     reviewed_by = await db.get(User, task.reviewed_by_user_id) if task.reviewed_by_user_id else None
@@ -101,6 +129,7 @@ async def serialize_task(db: AsyncSession, task: Task) -> TaskResponse:
         reviewed_by=UserResponse.model_validate(reviewed_by) if reviewed_by else None,
         reviewed_at=task.reviewed_at,
         assignees=assignees,
+        linked_files=await serialize_task_linked_files(db, task),
         created_at=task.created_at,
         updated_at=task.updated_at,
     )
@@ -193,6 +222,25 @@ async def create_task(
 
     for assignee_id in assignee_ids:
         db.add(TaskAssignee(task_id=task.id, user_id=assignee_id, status=payload.initial_status))
+
+    if payload.linked_file is not None:
+        linked_file_title = (payload.linked_file.title or payload.title).strip()
+        if not linked_file_title:
+            linked_file_title = payload.title.strip()
+        linked_file_url = payload.linked_file.url.strip() if payload.linked_file.url else None
+        if payload.linked_file.mode == "link" and not linked_file_url:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="URL is required for linked external files")
+        resource = FileResource(
+            project_id=project.id,
+            title=linked_file_title,
+            kind=payload.linked_file.mode,
+            url=linked_file_url if payload.linked_file.mode == "link" else None,
+            content_html=sanitize_html("<p></p>") if payload.linked_file.mode == "doc" else None,
+            created_by_user_id=user.id,
+        )
+        db.add(resource)
+        await db.flush()
+        db.add(TaskFileLink(task_id=task.id, file_resource_id=resource.id))
 
     await db.commit()
     await db.refresh(task)

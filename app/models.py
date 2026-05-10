@@ -76,3 +76,27 @@ class TaskAssignee(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class FileResource(Base):
+    __tablename__ = "file_resources"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(240), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    content_html: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class TaskFileLink(Base):
+    __tablename__ = "task_file_links"
+    __table_args__ = (UniqueConstraint("task_id", "file_resource_id", name="uq_task_file_links_task_file"),)
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    task_id: Mapped[UUID] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    file_resource_id: Mapped[UUID] = mapped_column(ForeignKey("file_resources.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

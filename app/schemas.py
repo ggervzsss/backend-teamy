@@ -54,6 +54,7 @@ class ProjectListResponse(BaseModel):
 TaskStatus = Literal["todo", "in_progress", "for_review", "done"]
 TaskPriority = Literal["low", "medium", "high"]
 AssigneeStatus = Literal["todo", "in_progress", "done"]
+FileResourceKind = Literal["doc", "link"]
 
 
 class ProjectMemberResponse(BaseModel):
@@ -74,6 +75,51 @@ class TaskAssigneeResponse(BaseModel):
     completed_at: datetime | None = None
 
 
+class LinkedTaskResponse(BaseModel):
+    id: UUID
+    title: str
+    status: TaskStatus
+
+
+class FileResourceSummaryResponse(BaseModel):
+    id: UUID
+    project_id: UUID
+    title: str
+    kind: FileResourceKind
+    url: str | None = None
+    created_by: UserResponse
+    linked_tasks: list[LinkedTaskResponse] = []
+    created_at: datetime
+    updated_at: datetime
+
+
+class FileResourceResponse(FileResourceSummaryResponse):
+    content_html: str | None = None
+
+
+class FileResourceListResponse(BaseModel):
+    files: list[FileResourceSummaryResponse]
+
+
+class FileResourceCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=240)
+    kind: FileResourceKind
+    url: str | None = Field(default=None, max_length=2048)
+    content_html: str | None = Field(default=None, max_length=500000)
+
+
+class FileResourceUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=240)
+    url: str | None = Field(default=None, max_length=2048)
+    content_html: str | None = Field(default=None, max_length=500000)
+
+
+class TaskLinkedFileCreateRequest(BaseModel):
+    mode: Literal["doc", "link"]
+    title: str | None = Field(default=None, max_length=240)
+    url: str | None = Field(default=None, max_length=2048)
+
+
 class TaskResponse(BaseModel):
     id: UUID
     project_id: UUID
@@ -86,6 +132,7 @@ class TaskResponse(BaseModel):
     reviewed_by: UserResponse | None = None
     reviewed_at: datetime | None = None
     assignees: list[TaskAssigneeResponse]
+    linked_files: list[FileResourceSummaryResponse] = []
     created_at: datetime
     updated_at: datetime
 
@@ -101,6 +148,7 @@ class TaskCreateRequest(BaseModel):
     priority: TaskPriority = "medium"
     due_date: date | None = None
     initial_status: Literal["todo", "in_progress"] = "todo"
+    linked_file: TaskLinkedFileCreateRequest | None = None
 
 
 class TaskAssigneeUpdateRequest(BaseModel):
