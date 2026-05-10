@@ -50,13 +50,61 @@ async def test_update_me_changes_profile_fields(client):
         json={"full_name": "Jane Doe", "email": "jane@example.com", "password": "password123"},
     )
 
-    response = await client.patch("/auth/me", json={"full_name": "Jane Rivera", "avatar_url": "https://example.com/jane.png"})
+    response = await client.patch("/auth/me", json={"full_name": "Jane Rivera", "username": "jane.rivera"})
     me_response = await client.get("/auth/me")
 
     assert response.status_code == 200
     assert response.json()["user"]["full_name"] == "Jane Rivera"
-    assert response.json()["user"]["avatar_url"] == "https://example.com/jane.png"
+    assert response.json()["user"]["username"] == "jane.rivera"
     assert me_response.json()["user"]["full_name"] == "Jane Rivera"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_username_is_rejected(client):
+    await client.post(
+        "/auth/signup",
+        json={"full_name": "Jane Doe", "email": "jane@example.com", "password": "password123"},
+    )
+    assert (await client.patch("/auth/me", json={"username": "shared.name"})).status_code == 200
+    await client.post("/auth/logout")
+
+    await client.post(
+        "/auth/signup",
+        json={"full_name": "John Doe", "email": "john@example.com", "password": "password123"},
+    )
+    response = await client.patch("/auth/me", json={"username": "shared.name"})
+
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_avatar_upload_and_restore_delete_cloudinary_asset(client, monkeypatch):
+    uploaded_public_ids = []
+    deleted_public_ids = []
+
+    async def fake_upload(settings, user_id, file):
+        uploaded_public_ids.append(f"teamy/avatars/{user_id}")
+        return "https://res.cloudinary.test/avatar.jpg", uploaded_public_ids[-1]
+
+    async def fake_delete(settings, public_id):
+        deleted_public_ids.append(public_id)
+
+    monkeypatch.setattr("app.auth.upload_profile_avatar", fake_upload)
+    monkeypatch.setattr("app.auth.delete_profile_avatar", fake_delete)
+
+    await client.post(
+        "/auth/signup",
+        json={"full_name": "Jane Doe", "email": "jane@example.com", "password": "password123"},
+    )
+
+    upload = await client.post("/auth/me/avatar", files={"file": ("avatar.png", b"image-bytes", "image/png")})
+    restore = await client.delete("/auth/me/avatar")
+
+    assert upload.status_code == 200
+    assert upload.json()["user"]["avatar_url"] == "https://res.cloudinary.test/avatar.jpg"
+    assert restore.status_code == 200
+    assert restore.json()["user"]["avatar_url"] is None
+    assert deleted_public_ids == uploaded_public_ids
 
 
 @pytest.mark.asyncio

@@ -1,12 +1,14 @@
+import re
 from typing import Annotated
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.cloudinary import delete_profile_avatar, upload_profile_avatar
 from app.config import Settings, get_settings
 from app.database import get_db
 from app.dependencies import get_current_user
@@ -26,10 +28,16 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
+USERNAME_PATTERN = re.compile(r"^[a-z0-9_][a-z0-9_.-]{1,38}[a-z0-9_]$")
 
 
 async def get_user_by_email(db: AsyncSession, email: str) -> User | None:
     result = await db.execute(select(User).where(User.email == email.lower()))
+    return result.scalar_one_or_none()
+
+
+async def get_user_by_username(db: AsyncSession, username: str) -> User | None:
+    result = await db.execute(select(User).where(User.username == username.lower()))
     return result.scalar_one_or_none()
 
 
@@ -88,10 +96,55 @@ async def update_me(
         if not full_name:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Full name is required")
         user.full_name = full_name
-    if payload.avatar_url is not None:
-        avatar_url = payload.avatar_url.strip()
-        user.avatar_url = avatar_url or None
+    if payload.username is not None:
+        username = payload.username.strip().lower()
+        if not username:
+            user.username = None
+        else:
+            if not USERNAME_PATTERN.fullmatch(username):
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Username must be 3-40 characters and use letters, numbers, dots, dashes, or underscores")
+            existing_user = await get_user_by_username(db, username)
+            if existing_user is not None and existing_user.id != user.id:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="That username is already taken")
+            user.username = username
 
+    await db.commit()
+    await db.refresh(user)
+    return AuthResponse(user=UserResponse.model_validate(user))
+
+
+@router.post("/me/avatar", response_model=AuthResponse)
+async def upload_my_avatar(
+    user: Annotated[User, Depends(get_current_user)],
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> AuthResponse:
+    old_public_id = user.cloudinary_avatar_public_id
+    avatar_url, public_id = await upload_profile_avatar(settings, user.id, file)
+    user.avatar_url = avatar_url
+    user.cloudinary_avatar_public_id = public_id
+    await db.commit()
+    await db.refresh(user)
+
+    if old_public_id and old_public_id != public_id:
+        await delete_profile_avatar(settings, old_public_id)
+
+    return AuthResponse(user=UserResponse.model_validate(user))
+
+
+@router.delete("/me/avatar", response_model=AuthResponse)
+async def delete_my_avatar(
+    user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> AuthResponse:
+    public_id = user.cloudinary_avatar_public_id
+    if public_id:
+        await delete_profile_avatar(settings, public_id)
+
+    user.avatar_url = None
+    user.cloudinary_avatar_public_id = None
     await db.commit()
     await db.refresh(user)
     return AuthResponse(user=UserResponse.model_validate(user))

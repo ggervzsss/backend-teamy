@@ -18,7 +18,7 @@ class LoginRequest(BaseModel):
 
 class UserProfileUpdateRequest(BaseModel):
     full_name: str | None = Field(default=None, min_length=1, max_length=160)
-    avatar_url: str | None = Field(default=None, max_length=1024)
+    username: str | None = Field(default=None, max_length=40)
 
 
 class PasswordChangeRequest(BaseModel):
@@ -32,6 +32,7 @@ class UserResponse(BaseModel):
     id: UUID
     email: EmailStr
     full_name: str
+    username: str | None = None
     avatar_url: str | None = None
 
 
