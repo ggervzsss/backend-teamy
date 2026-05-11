@@ -168,7 +168,7 @@ async def test_request_changes_resets_assignees_to_progress(client):
 
 
 @pytest.mark.asyncio
-async def test_task_moves_to_review_when_only_assigned_leader_is_not_ready(client):
+async def test_task_stays_in_progress_until_every_assignee_is_ready(client):
     project, leader, member_one, _ = await setup_project_with_members(client)
     created = await client.post(
         f"/projects/{project['id']}/tasks",
@@ -182,10 +182,13 @@ async def test_task_moves_to_review_when_only_assigned_leader_is_not_ready(clien
 
     assert updated.status_code == 200
     body = updated.json()
-    assert body["status"] == "for_review"
+    assert body["status"] == "in_progress"
     assignee_statuses = {assignee["user"]["id"]: assignee["status"] for assignee in body["assignees"]}
     assert assignee_statuses[leader["id"]] == "in_progress"
     assert assignee_statuses[member_one["id"]] == "ready_for_review"
+
+    submit = await client.post(f"/projects/{project['id']}/tasks/{task_id}/submit-review")
+    assert submit.status_code == 400
 
 
 @pytest.mark.asyncio

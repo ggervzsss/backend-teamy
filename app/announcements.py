@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +12,7 @@ from app.config import get_settings
 from app.database import SessionLocal, get_db
 from app.dependencies import get_current_user
 from app.models import Announcement, AnnouncementRead, Project, ProjectMember, User
+from app.notifications import get_project_member_recipients, send_announcement_email
 from app.projects import get_project_membership, require_project_active
 from app.schemas import (
     AnnouncementCreateRequest,
@@ -140,9 +141,11 @@ async def create_announcement_socket_ticket_endpoint(
 @router.post("", response_model=AnnouncementResponse, status_code=status.HTTP_201_CREATED)
 async def create_announcement(
     payload: AnnouncementCreateRequest,
+    background_tasks: BackgroundTasks,
     user: Annotated[User, Depends(get_current_user)],
     membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
     db: AsyncSession = Depends(get_db),
+    settings=Depends(get_settings),
 ) -> AnnouncementResponse:
     project, _ = membership
     require_project_active(project)
@@ -167,6 +170,17 @@ async def create_announcement(
 
     response = await serialize_announcement(db, announcement, user.id, is_read=True)
     broadcast_announcement = await serialize_announcement(db, announcement, user.id, is_read=False)
+    recipients = await get_project_member_recipients(db, project.id)
+    background_tasks.add_task(
+        send_announcement_email,
+        settings,
+        recipients,
+        project.id,
+        project.name,
+        announcement.title,
+        announcement.body,
+        announcement.deadline_date,
+    )
     await manager.broadcast(project.id, {"event": "announcement.created", "announcement": broadcast_announcement})
     return response
 

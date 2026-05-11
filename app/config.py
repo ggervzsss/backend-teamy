@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     cloudinary_api_key: str = ""
     cloudinary_api_secret: str = ""
     cloudinary_secure: bool = True
+    resend_api_key: str = ""
+    resend_from_email: str = "Teamy <onboarding@resend.dev>"
+    notification_reminder_secret: str = ""
+    notification_reminder_timezone: str = "Asia/Manila"
     database_ssl: bool = False
     database_ssl_verify: bool = True
     database_ssl_ca: str | None = None

@@ -23,3 +23,17 @@ uv run pytest
 uv run alembic upgrade head
 uv run uvicorn app.main:app --reload
 ```
+
+### Email notifications
+
+Set `RESEND_API_KEY` and `RESEND_FROM_EMAIL` in the backend environment to enable email notifications. `RESEND_FROM_EMAIL` should use a sender/domain verified in Resend for production.
+
+Task and announcement event emails are queued automatically by the API. Due-date reminders are queued by calling:
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri http://localhost:8000/notifications/reminders/due `
+  -Headers @{ "X-Teamy-Reminder-Secret" = $env:NOTIFICATION_REMINDER_SECRET }
+```
+
+Run that endpoint daily from your scheduler. It sends task reminders to assigned users and announcement reminders to project members for items scheduled today or tomorrow.

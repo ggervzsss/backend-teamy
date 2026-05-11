@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +13,13 @@ from app.database import get_db, SessionLocal
 from app.dependencies import get_current_user
 from app.html_sanitizer import sanitize_html
 from app.models import FileResource, Project, ProjectMember, Task, TaskAssignee, TaskFileLink, User
+from app.notifications import (
+    get_project_leader_recipients,
+    get_user_recipients,
+    send_task_assignment_email,
+    send_task_changes_requested_email,
+    send_task_ready_for_review_email,
+)
 from app.projects import get_project_membership, require_project_active
 from app.schemas import (
     FileResourceSummaryResponse,
@@ -74,14 +81,15 @@ async def get_project_member_user_ids(db: AsyncSession, project_id: UUID) -> set
     return set(result.scalars().all())
 
 
-async def get_project_leader_user_ids(db: AsyncSession, project_id: UUID) -> set[UUID]:
-    result = await db.execute(select(ProjectMember.user_id).where(ProjectMember.project_id == project_id, ProjectMember.role == "leader"))
-    return set(result.scalars().all())
-
-
 async def user_is_task_assignee(db: AsyncSession, task_id: UUID, user_id: UUID) -> bool:
     result = await db.execute(select(TaskAssignee.id).where(TaskAssignee.task_id == task_id, TaskAssignee.user_id == user_id))
     return result.scalar_one_or_none() is not None
+
+
+async def all_task_assignees_ready(db: AsyncSession, task_id: UUID) -> bool:
+    result = await db.execute(select(TaskAssignee.status).where(TaskAssignee.task_id == task_id))
+    assignee_statuses = list(result.scalars().all())
+    return bool(assignee_statuses) and all(assignee_status == "ready_for_review" for assignee_status in assignee_statuses)
 
 
 def require_task_manager(project_member: ProjectMember, task: Task, user: User) -> None:
@@ -182,18 +190,6 @@ async def get_task_for_project(db: AsyncSession, project_id: UUID, task_id: UUID
 async def move_task_after_assignee_update(db: AsyncSession, task: Task) -> None:
     assignee_result = await db.execute(select(TaskAssignee).where(TaskAssignee.task_id == task.id))
     assignees = list(assignee_result.scalars().all())
-    leader_user_ids = await get_project_leader_user_ids(db, task.project_id)
-    if (
-        task.status != "todo"
-        and assignees
-        and any(assignee.user_id in leader_user_ids and assignee.status != "ready_for_review" for assignee in assignees)
-        and all(assignee.status == "ready_for_review" for assignee in assignees if assignee.user_id not in leader_user_ids)
-        and any(assignee.user_id not in leader_user_ids for assignee in assignees)
-    ):
-        task.status = "for_review"
-        task.reviewed_by_user_id = None
-        task.reviewed_at = None
-        return
     if any(assignee.status in {"in_progress", "ready_for_review"} for assignee in assignees):
         task.status = "in_progress"
     else:
@@ -251,9 +247,11 @@ async def create_task_socket_ticket_endpoint(
 @router.post("/tasks", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
 async def create_task(
     payload: TaskCreateRequest,
+    background_tasks: BackgroundTasks,
     user: Annotated[User, Depends(get_current_user)],
     membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
     db: AsyncSession = Depends(get_db),
+    settings=Depends(get_settings),
 ) -> TaskResponse:
     project, _ = membership
     require_project_active(project)
@@ -288,6 +286,8 @@ async def create_task(
     await db.commit()
     await db.refresh(task)
     response = await serialize_task(db, task)
+    recipients = await get_user_recipients(db, set(assignee_ids))
+    background_tasks.add_task(send_task_assignment_email, settings, recipients, project.id, project.name, task.title, task.due_date)
     await manager.broadcast(project.id, "task.created", response)
     return response
 
@@ -296,9 +296,11 @@ async def create_task(
 async def update_task(
     task_id: UUID,
     payload: TaskUpdateRequest,
+    background_tasks: BackgroundTasks,
     user: Annotated[User, Depends(get_current_user)],
     membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
     db: AsyncSession = Depends(get_db),
+    settings=Depends(get_settings),
 ) -> TaskResponse:
     project, project_member = membership
     require_project_active(project)
@@ -317,6 +319,7 @@ async def update_task(
         task.due_date = payload.due_date
 
     assignees_changed = False
+    newly_assigned_user_ids: set[UUID] = set()
     if payload.assignee_ids is not None:
         assignee_ids = list(dict.fromkeys(payload.assignee_ids))
         if not assignee_ids:
@@ -331,6 +334,7 @@ async def update_task(
         next_assignee_ids = set(assignee_ids)
         if set(current_assignees) != next_assignee_ids:
             assignees_changed = True
+            newly_assigned_user_ids = next_assignee_ids - set(current_assignees)
 
         for assignee_user_id, assignee in current_assignees.items():
             if assignee_user_id not in next_assignee_ids:
@@ -354,6 +358,9 @@ async def update_task(
     await db.commit()
     await db.refresh(task)
     response = await serialize_task(db, task)
+    if newly_assigned_user_ids:
+        recipients = await get_user_recipients(db, newly_assigned_user_ids)
+        background_tasks.add_task(send_task_assignment_email, settings, recipients, project.id, project.name, task.title, task.due_date)
     await manager.broadcast(project.id, "task.updated", response)
     return response
 
@@ -388,9 +395,11 @@ async def link_task_file(
 async def update_my_task_status(
     task_id: UUID,
     payload: TaskAssigneeUpdateRequest,
+    background_tasks: BackgroundTasks,
     user: Annotated[User, Depends(get_current_user)],
     membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
     db: AsyncSession = Depends(get_db),
+    settings=Depends(get_settings),
 ) -> TaskResponse:
     project, _ = membership
     require_project_active(project)
@@ -404,12 +413,17 @@ async def update_my_task_status(
     if task.status == "for_review":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tasks in review cannot be updated until changes are requested")
 
+    was_ready_for_review = await all_task_assignees_ready(db, task.id)
     assignee.status = payload.status
     assignee.completed_at = datetime.now(UTC) if payload.status == "ready_for_review" else None
     await move_task_after_assignee_update(db, task)
     await db.commit()
     await db.refresh(task)
     response = await serialize_task(db, task)
+    is_ready_for_review = all(task_assignee.status == "ready_for_review" for task_assignee in response.assignees)
+    if not was_ready_for_review and is_ready_for_review:
+        recipients = await get_project_leader_recipients(db, project.id)
+        background_tasks.add_task(send_task_ready_for_review_email, settings, recipients, project.id, project.name, task.title)
     await manager.broadcast(project.id, "task.updated", response)
     return response
 
@@ -433,9 +447,7 @@ async def submit_task_for_review(
     assignees = list(assignee_result.scalars().all())
     if not any(assignee.user_id == user.id for assignee in assignees):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only assigned members can submit this task for review")
-    leader_user_ids = await get_project_leader_user_ids(db, project.id)
-    non_leader_assignees = [assignee for assignee in assignees if assignee.user_id not in leader_user_ids]
-    if not assignees or not non_leader_assignees or any(assignee.status != "ready_for_review" for assignee in non_leader_assignees):
+    if not assignees or any(assignee.status != "ready_for_review" for assignee in assignees):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Every assignee must be ready for review first")
 
     task.status = "for_review"
@@ -452,9 +464,11 @@ async def submit_task_for_review(
 async def review_task(
     task_id: UUID,
     payload: TaskReviewRequest,
+    background_tasks: BackgroundTasks,
     user: Annotated[User, Depends(get_current_user)],
     membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
     db: AsyncSession = Depends(get_db),
+    settings=Depends(get_settings),
 ) -> TaskResponse:
     project, project_member = membership
     require_project_active(project)
@@ -481,6 +495,17 @@ async def review_task(
     await db.commit()
     await db.refresh(task)
     response = await serialize_task(db, task)
+    if payload.action == "request_changes":
+        recipients = await get_user_recipients(db, {assignee.user.id for assignee in response.assignees})
+        background_tasks.add_task(
+            send_task_changes_requested_email,
+            settings,
+            recipients,
+            project.id,
+            project.name,
+            task.title,
+            task.review_remarks,
+        )
     await manager.broadcast(project.id, "task.reviewed", response)
     return response
 
