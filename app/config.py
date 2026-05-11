@@ -2,8 +2,11 @@ from functools import lru_cache
 import ssl
 
 from pydantic import AnyHttpUrl, Field
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL, make_url
+
+RESERVED_DATABASE_NAMES = {"information_schema", "mysql", "performance_schema", "sys"}
 
 
 class Settings(BaseSettings):
@@ -27,6 +30,18 @@ class Settings(BaseSettings):
     database_ssl: bool = False
     database_ssl_verify: bool = True
     database_ssl_ca: str | None = None
+
+    @model_validator(mode="after")
+    def validate_database_name(self) -> "Settings":
+        database_name = make_url(self.database_url).database
+        if database_name is None:
+            raise ValueError("DATABASE_URL must include an application database name, for example /teamy")
+        if database_name.lower() in RESERVED_DATABASE_NAMES:
+            raise ValueError(
+                f"DATABASE_URL points to the MySQL/TiDB system database '{database_name}'. "
+                "Use an application database such as 'teamy' instead."
+            )
+        return self
 
     @property
     def cors_origins(self) -> list[str]:
