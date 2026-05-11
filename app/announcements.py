@@ -71,10 +71,10 @@ async def mark_announcement_read(db: AsyncSession, announcement_id: UUID, user_i
     if existing_read is not None:
         return False, existing_read.read_at
 
-    read = AnnouncementRead(announcement_id=announcement_id, user_id=user_id)
+    read_at = datetime.now(UTC)
+    read = AnnouncementRead(announcement_id=announcement_id, user_id=user_id, read_at=read_at)
     db.add(read)
     await db.flush()
-    read_at = read.read_at or datetime.now(UTC)
     return True, read_at
 
 
