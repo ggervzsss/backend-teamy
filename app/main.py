@@ -40,7 +40,7 @@ def create_app() -> FastAPI:
         logger.exception("Unhandled API error on %s %s", request.method, request.url.path, exc_info=(type(exc), exc, exc.__traceback__))
         return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
-    @app.get("/health")
+    @app.api_route("/health", methods=["GET", "HEAD"])
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
