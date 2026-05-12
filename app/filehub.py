@@ -2,7 +2,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -132,7 +132,10 @@ async def update_file_resource(
     project, _ = membership
     resource = await get_file_for_project(db, project.id, file_id)
     if payload.title is not None:
-        resource.title = payload.title.strip()
+        clean_title = payload.title.strip()
+        if not clean_title:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Title is required")
+        resource.title = clean_title
     if resource.kind == "link" and payload.url is not None:
         resource.url = validate_file_payload(resource.kind, resource.title, payload.url)
     if resource.kind == "doc" and payload.content_html is not None:
@@ -140,3 +143,16 @@ async def update_file_resource(
     await db.commit()
     await db.refresh(resource)
     return await serialize_file_resource(db, resource, include_content=True)  # type: ignore[return-value]
+
+
+@router.delete("/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_file_resource(
+    file_id: UUID,
+    membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    project, _ = membership
+    resource = await get_file_for_project(db, project.id, file_id)
+    await db.execute(delete(TaskFileLink).where(TaskFileLink.file_resource_id == resource.id))
+    await db.delete(resource)
+    await db.commit()

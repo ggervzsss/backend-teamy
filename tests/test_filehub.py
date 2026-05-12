@@ -94,6 +94,31 @@ async def test_project_members_can_create_links(client):
 
 
 @pytest.mark.asyncio
+async def test_project_members_can_delete_resources_created_by_others(client):
+    project, _, member = await setup_project(client)
+
+    created = await client.post(
+        f"/projects/{project['id']}/files",
+        json={"kind": "link", "title": "Shared Spec", "url": "https://example.com/spec"},
+    )
+    assert created.status_code == 201
+    file_id = created.json()["id"]
+
+    await logout(client)
+    await login(client, member["email"])
+
+    deleted = await client.delete(f"/projects/{project['id']}/files/{file_id}")
+    assert deleted.status_code == 204
+
+    listed = await client.get(f"/projects/{project['id']}/files")
+    assert listed.status_code == 200
+    assert listed.json()["files"] == []
+
+    opened = await client.get(f"/projects/{project['id']}/files/{file_id}")
+    assert opened.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_non_members_cannot_access_file_hub(client):
     project, _, _ = await setup_project(client)
     await logout(client)
