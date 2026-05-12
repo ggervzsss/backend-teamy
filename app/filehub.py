@@ -17,8 +17,8 @@ from app.schemas import (
     FileResourceSummaryResponse,
     FileResourceUpdateRequest,
     LinkedTaskResponse,
-    UserResponse,
 )
+from app.user_responses import serialize_project_user
 
 router = APIRouter(prefix="/projects/{project_id}/files", tags=["file-hub"])
 
@@ -49,6 +49,8 @@ async def serialize_file_resource(db: AsyncSession, resource: FileResource, incl
     creator = await db.get(User, resource.created_by_user_id)
     if creator is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="File creator could not be loaded")
+    member_result = await db.execute(select(ProjectMember).where(ProjectMember.project_id == resource.project_id, ProjectMember.user_id == creator.id))
+    creator_member = member_result.scalar_one_or_none()
 
     base = {
         "id": resource.id,
@@ -56,7 +58,7 @@ async def serialize_file_resource(db: AsyncSession, resource: FileResource, incl
         "title": resource.title,
         "kind": resource.kind,
         "url": resource.url,
-        "created_by": UserResponse.model_validate(creator),
+        "created_by": serialize_project_user(creator, creator_member),
         "linked_tasks": await get_linked_tasks(db, resource.id),
         "created_at": resource.created_at,
         "updated_at": resource.updated_at,

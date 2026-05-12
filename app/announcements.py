@@ -21,9 +21,9 @@ from app.schemas import (
     AnnouncementResponse,
     AnnouncementSocketTicketResponse,
     AnnouncementUpdateRequest,
-    UserResponse,
 )
 from app.security import create_announcement_socket_ticket, decode_announcement_socket_ticket, decode_session_token
+from app.user_responses import serialize_project_user
 
 router = APIRouter(prefix="/projects/{project_id}/announcements", tags=["announcements"])
 
@@ -83,6 +83,8 @@ async def serialize_announcement(db: AsyncSession, announcement: Announcement, u
     creator = await db.get(User, announcement.created_by_user_id)
     if creator is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Announcement creator could not be loaded")
+    member_result = await db.execute(select(ProjectMember).where(ProjectMember.project_id == announcement.project_id, ProjectMember.user_id == creator.id))
+    creator_member = member_result.scalar_one_or_none()
 
     return AnnouncementResponse(
         id=announcement.id,
@@ -92,7 +94,7 @@ async def serialize_announcement(db: AsyncSession, announcement: Announcement, u
         is_pinned=announcement.is_pinned,
         deadline_date=announcement.deadline_date,
         is_read=await has_read_announcement(db, announcement.id, user_id) if is_read is None else is_read,
-        created_by=UserResponse.model_validate(creator),
+        created_by=serialize_project_user(creator, creator_member),
         created_at=announcement.created_at,
         updated_at=announcement.updated_at,
     )

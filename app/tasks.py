@@ -35,9 +35,9 @@ from app.schemas import (
     TaskReviewRequest,
     TaskSocketTicketResponse,
     TaskUpdateRequest,
-    UserResponse,
 )
 from app.security import create_task_socket_ticket, decode_session_token, decode_task_socket_ticket
+from app.user_responses import serialize_project_user
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["tasks"])
 
@@ -116,9 +116,10 @@ def build_linked_file_resource(project_id: UUID, user_id: UUID, fallback_title: 
 
 async def serialize_task_linked_files(db: AsyncSession, task: Task) -> list[FileResourceSummaryResponse]:
     result = await db.execute(
-        select(FileResource, User)
+        select(FileResource, User, ProjectMember)
         .join(TaskFileLink, TaskFileLink.file_resource_id == FileResource.id)
         .join(User, User.id == FileResource.created_by_user_id)
+        .join(ProjectMember, (ProjectMember.user_id == User.id) & (ProjectMember.project_id == FileResource.project_id))
         .where(TaskFileLink.task_id == task.id)
         .order_by(FileResource.updated_at.desc(), FileResource.created_at.desc())
     )
@@ -130,35 +131,46 @@ async def serialize_task_linked_files(db: AsyncSession, task: Task) -> list[File
             title=resource.title,
             kind=resource.kind,
             url=resource.url,
-            created_by=UserResponse.model_validate(creator),
+            created_by=serialize_project_user(creator, member),
             linked_tasks=[linked_task],
             created_at=resource.created_at,
             updated_at=resource.updated_at,
         )
-        for resource, creator in result.all()
+        for resource, creator, member in result.all()
+    ]
+
+
+async def get_project_member_for_user(db: AsyncSession, project_id: UUID, user_id: UUID) -> ProjectMember | None:
+    result = await db.execute(select(ProjectMember).where(ProjectMember.project_id == project_id, ProjectMember.user_id == user_id))
+    return result.scalar_one_or_none()
+
+
+async def serialize_task_assignees(db: AsyncSession, task: Task) -> list[TaskAssigneeResponse]:
+    assignee_result = await db.execute(
+        select(TaskAssignee, User, ProjectMember)
+        .join(User, User.id == TaskAssignee.user_id)
+        .join(ProjectMember, (ProjectMember.user_id == User.id) & (ProjectMember.project_id == task.project_id))
+        .where(TaskAssignee.task_id == task.id)
+        .order_by(User.full_name.asc(), User.email.asc())
+    )
+    return [
+        TaskAssigneeResponse(
+            id=assignee.id,
+            user=serialize_project_user(user, member),
+            status=assignee.status,
+            completed_at=assignee.completed_at,
+        )
+        for assignee, user, member in assignee_result.all()
     ]
 
 
 async def serialize_task(db: AsyncSession, task: Task) -> TaskResponse:
     creator = await db.get(User, task.created_by_user_id)
     reviewed_by = await db.get(User, task.reviewed_by_user_id) if task.reviewed_by_user_id else None
-    assignee_result = await db.execute(
-        select(TaskAssignee, User)
-        .join(User, User.id == TaskAssignee.user_id)
-        .where(TaskAssignee.task_id == task.id)
-        .order_by(User.full_name.asc(), User.email.asc())
-    )
-    assignees = [
-        TaskAssigneeResponse(
-            id=assignee.id,
-            user=UserResponse.model_validate(user),
-            status=assignee.status,
-            completed_at=assignee.completed_at,
-        )
-        for assignee, user in assignee_result.all()
-    ]
     if creator is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Task creator could not be loaded")
+    creator_member = await get_project_member_for_user(db, task.project_id, creator.id)
+    reviewed_by_member = await get_project_member_for_user(db, task.project_id, reviewed_by.id) if reviewed_by else None
 
     return TaskResponse(
         id=task.id,
@@ -168,11 +180,11 @@ async def serialize_task(db: AsyncSession, task: Task) -> TaskResponse:
         priority=task.priority,
         due_date=task.due_date,
         status=task.status,
-        created_by=UserResponse.model_validate(creator),
-        reviewed_by=UserResponse.model_validate(reviewed_by) if reviewed_by else None,
+        created_by=serialize_project_user(creator, creator_member),
+        reviewed_by=serialize_project_user(reviewed_by, reviewed_by_member) if reviewed_by else None,
         reviewed_at=task.reviewed_at,
         review_remarks=task.review_remarks,
-        assignees=assignees,
+        assignees=await serialize_task_assignees(db, task),
         linked_files=await serialize_task_linked_files(db, task),
         created_at=task.created_at,
         updated_at=task.updated_at,
@@ -214,8 +226,9 @@ async def list_project_members(
         members=[
             ProjectMemberResponse(
                 id=member.id,
-                user=UserResponse.model_validate(user),
+                user=serialize_project_user(user, member),
                 role=member.role,
+                nickname=member.nickname,
                 joined_at=member.joined_at,
             )
             for member, user in result.all()

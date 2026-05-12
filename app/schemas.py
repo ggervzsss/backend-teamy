@@ -18,7 +18,6 @@ class LoginRequest(BaseModel):
 
 class UserProfileUpdateRequest(BaseModel):
     full_name: str | None = Field(default=None, min_length=1, max_length=160)
-    username: str | None = Field(default=None, max_length=40)
 
 
 class PasswordChangeRequest(BaseModel):
@@ -89,6 +88,7 @@ class ProjectMemberResponse(BaseModel):
     id: UUID
     user: UserResponse
     role: str
+    nickname: str | None = None
     joined_at: datetime
 
 
@@ -107,6 +107,10 @@ class ProjectPresenceResponse(BaseModel):
 
 class TeamSocketTicketResponse(BaseModel):
     ticket: str
+
+
+class ProjectMemberNicknameUpdateRequest(BaseModel):
+    nickname: str | None = Field(default=None, max_length=40)
 
 
 class TaskAssigneeResponse(BaseModel):

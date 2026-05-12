@@ -1,4 +1,3 @@
-import re
 from typing import Annotated
 from urllib.parse import urlencode
 
@@ -13,7 +12,7 @@ from app.config import Settings, get_settings
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models import User
-from app.schemas import AuthResponse, LoginRequest, PasswordChangeRequest, SignupRequest, UserProfileUpdateRequest, UserResponse
+from app.schemas import AuthResponse, LoginRequest, PasswordChangeRequest, SignupRequest, UserProfileUpdateRequest
 from app.security import (
     clear_session_cookie,
     create_oauth_state,
@@ -23,21 +22,15 @@ from app.security import (
     set_session_cookie,
     verify_password,
 )
+from app.user_responses import serialize_account_user
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
-USERNAME_PATTERN = re.compile(r"^\S(?:.*\S)?$")
-
 
 async def get_user_by_email(db: AsyncSession, email: str) -> User | None:
     result = await db.execute(select(User).where(User.email == email.lower()))
-    return result.scalar_one_or_none()
-
-
-async def get_user_by_username(db: AsyncSession, username: str) -> User | None:
-    result = await db.execute(select(User).where(User.username == username))
     return result.scalar_one_or_none()
 
 
@@ -62,7 +55,7 @@ async def signup(payload: SignupRequest, response: Response, db: AsyncSession = 
     await db.commit()
     await db.refresh(user)
     issue_session(response, user, settings)
-    return AuthResponse(user=UserResponse.model_validate(user))
+    return AuthResponse(user=serialize_account_user(user))
 
 
 @router.post("/login", response_model=AuthResponse)
@@ -72,7 +65,7 @@ async def login(payload: LoginRequest, response: Response, db: AsyncSession = De
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
 
     issue_session(response, user, settings)
-    return AuthResponse(user=UserResponse.model_validate(user))
+    return AuthResponse(user=serialize_account_user(user))
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -82,7 +75,7 @@ async def logout(response: Response, settings: Settings = Depends(get_settings))
 
 @router.get("/me", response_model=AuthResponse)
 async def me(user: Annotated[User, Depends(get_current_user)]) -> AuthResponse:
-    return AuthResponse(user=UserResponse.model_validate(user))
+    return AuthResponse(user=serialize_account_user(user))
 
 
 @router.patch("/me", response_model=AuthResponse)
@@ -96,21 +89,10 @@ async def update_me(
         if not full_name:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Full name is required")
         user.full_name = full_name
-    if "username" in payload.model_fields_set:
-        username = payload.username.strip() if payload.username is not None else ""
-        if not username:
-            user.username = None
-        else:
-            if not USERNAME_PATTERN.fullmatch(username):
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Username cannot start or end with spaces")
-            existing_user = await get_user_by_username(db, username)
-            if existing_user is not None and existing_user.id != user.id:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="That username is already taken")
-            user.username = username
 
     await db.commit()
     await db.refresh(user)
-    return AuthResponse(user=UserResponse.model_validate(user))
+    return AuthResponse(user=serialize_account_user(user))
 
 
 @router.post("/me/avatar", response_model=AuthResponse)
@@ -130,7 +112,7 @@ async def upload_my_avatar(
     if old_public_id and old_public_id != public_id:
         await delete_profile_avatar(settings, old_public_id)
 
-    return AuthResponse(user=UserResponse.model_validate(user))
+    return AuthResponse(user=serialize_account_user(user))
 
 
 @router.delete("/me/avatar", response_model=AuthResponse)
@@ -147,7 +129,7 @@ async def delete_my_avatar(
     user.cloudinary_avatar_public_id = None
     await db.commit()
     await db.refresh(user)
-    return AuthResponse(user=UserResponse.model_validate(user))
+    return AuthResponse(user=serialize_account_user(user))
 
 
 @router.post("/me/avatar/google", response_model=AuthResponse)
@@ -167,7 +149,7 @@ async def restore_my_google_avatar(
     user.cloudinary_avatar_public_id = None
     await db.commit()
     await db.refresh(user)
-    return AuthResponse(user=UserResponse.model_validate(user))
+    return AuthResponse(user=serialize_account_user(user))
 
 
 @router.patch("/me/password", status_code=status.HTTP_204_NO_CONTENT)

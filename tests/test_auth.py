@@ -50,36 +50,14 @@ async def test_update_me_changes_profile_fields(client):
         json={"full_name": "Jane Doe", "email": "jane@example.com", "password": "password123"},
     )
 
-    response = await client.patch("/auth/me", json={"full_name": "Jane Rivera", "username": "Jane Rivera"})
+    response = await client.patch("/auth/me", json={"full_name": "Jane Rivera"})
     me_response = await client.get("/auth/me")
 
     assert response.status_code == 200
     assert response.json()["user"]["full_name"] == "Jane Rivera"
-    assert response.json()["user"]["username"] == "Jane Rivera"
+    assert response.json()["user"]["username"] is None
     assert me_response.json()["user"]["full_name"] == "Jane Rivera"
-
-    clear_response = await client.patch("/auth/me", json={"username": None})
-
-    assert clear_response.status_code == 200
-    assert clear_response.json()["user"]["username"] is None
-
-
-@pytest.mark.asyncio
-async def test_duplicate_username_is_rejected(client):
-    await client.post(
-        "/auth/signup",
-        json={"full_name": "Jane Doe", "email": "jane@example.com", "password": "password123"},
-    )
-    assert (await client.patch("/auth/me", json={"username": "shared.name"})).status_code == 200
-    await client.post("/auth/logout")
-
-    await client.post(
-        "/auth/signup",
-        json={"full_name": "John Doe", "email": "john@example.com", "password": "password123"},
-    )
-    response = await client.patch("/auth/me", json={"username": "shared.name"})
-
-    assert response.status_code == 409
+    assert me_response.json()["user"]["username"] is None
 
 
 @pytest.mark.asyncio

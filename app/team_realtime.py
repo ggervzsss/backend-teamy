@@ -8,7 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ProjectMember, User
-from app.schemas import ProjectMemberPresenceResponse, ProjectMemberResponse, UserResponse
+from app.schemas import ProjectMemberPresenceResponse, ProjectMemberResponse
+from app.user_responses import serialize_project_user
 
 
 class TeamConnectionManager:
@@ -57,10 +58,11 @@ class TeamConnectionManager:
         await websocket.send_json(jsonable_encoder({"event": "team.presence", "members": members}))
 
     async def broadcast(self, project_id: UUID, payload: dict) -> None:
+        encoded_payload = jsonable_encoder(payload)
         dead_connections: list[WebSocket] = []
         for websocket in self.active_connections.get(project_id, set()).copy():
             try:
-                await websocket.send_json(payload)
+                await websocket.send_json(encoded_payload)
             except RuntimeError:
                 dead_connections.append(websocket)
 
@@ -78,8 +80,9 @@ async def serialize_project_member(db: AsyncSession, member: ProjectMember) -> P
 
     return ProjectMemberResponse(
         id=member.id,
-        user=UserResponse.model_validate(user),
+        user=serialize_project_user(user, member),
         role=member.role,
+        nickname=member.nickname,
         joined_at=member.joined_at,
     )
 
@@ -94,8 +97,9 @@ async def serialize_project_presence_members(db: AsyncSession, project_id: UUID)
     return [
         ProjectMemberPresenceResponse(
             id=member.id,
-            user=UserResponse.model_validate(user),
+            user=serialize_project_user(user, member),
             role=member.role,
+            nickname=member.nickname,
             joined_at=member.joined_at,
             is_online=manager.is_user_online(project_id, user.id),
             last_online_at=user.last_online_at,
