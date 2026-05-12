@@ -28,7 +28,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
-USERNAME_PATTERN = re.compile(r"^[a-z0-9_][a-z0-9_.-]{1,38}[a-z0-9_]$")
+USERNAME_PATTERN = re.compile(r"^\S(?:.*\S)?$")
 
 
 async def get_user_by_email(db: AsyncSession, email: str) -> User | None:
@@ -37,7 +37,7 @@ async def get_user_by_email(db: AsyncSession, email: str) -> User | None:
 
 
 async def get_user_by_username(db: AsyncSession, username: str) -> User | None:
-    result = await db.execute(select(User).where(User.username == username.lower()))
+    result = await db.execute(select(User).where(User.username == username))
     return result.scalar_one_or_none()
 
 
@@ -96,13 +96,13 @@ async def update_me(
         if not full_name:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Full name is required")
         user.full_name = full_name
-    if payload.username is not None:
-        username = payload.username.strip().lower()
+    if "username" in payload.model_fields_set:
+        username = payload.username.strip() if payload.username is not None else ""
         if not username:
             user.username = None
         else:
             if not USERNAME_PATTERN.fullmatch(username):
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Username must be 3-40 characters and use letters, numbers, dots, dashes, or underscores")
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Username cannot start or end with spaces")
             existing_user = await get_user_by_username(db, username)
             if existing_user is not None and existing_user.id != user.id:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="That username is already taken")

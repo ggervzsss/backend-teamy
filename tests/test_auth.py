@@ -50,13 +50,18 @@ async def test_update_me_changes_profile_fields(client):
         json={"full_name": "Jane Doe", "email": "jane@example.com", "password": "password123"},
     )
 
-    response = await client.patch("/auth/me", json={"full_name": "Jane Rivera", "username": "jane.rivera"})
+    response = await client.patch("/auth/me", json={"full_name": "Jane Rivera", "username": "Jane Rivera"})
     me_response = await client.get("/auth/me")
 
     assert response.status_code == 200
     assert response.json()["user"]["full_name"] == "Jane Rivera"
-    assert response.json()["user"]["username"] == "jane.rivera"
+    assert response.json()["user"]["username"] == "Jane Rivera"
     assert me_response.json()["user"]["full_name"] == "Jane Rivera"
+
+    clear_response = await client.patch("/auth/me", json={"username": None})
+
+    assert clear_response.status_code == 200
+    assert clear_response.json()["user"]["username"] is None
 
 
 @pytest.mark.asyncio
