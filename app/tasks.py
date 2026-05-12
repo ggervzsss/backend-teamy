@@ -510,6 +510,24 @@ async def review_task(
     return response
 
 
+@router.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_task(
+    task_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    project, project_member = membership
+    require_project_active(project)
+    task = await get_task_for_project(db, project.id, task_id)
+    require_task_manager(project_member, task, user)
+
+    response = await serialize_task(db, task)
+    await db.delete(task)
+    await db.commit()
+    await manager.broadcast(project.id, "task.deleted", response)
+
+
 @router.websocket("/tasks/ws")
 async def task_updates(websocket: WebSocket, project_id: UUID) -> None:
     settings = get_settings()
