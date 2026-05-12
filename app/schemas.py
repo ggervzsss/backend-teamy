@@ -213,6 +213,27 @@ class AnnouncementPinRequest(BaseModel):
     is_pinned: bool
 
 
+class NotificationResponse(BaseModel):
+    id: UUID
+    project_id: UUID | None = None
+    kind: str
+    title: str
+    body: str | None = None
+    target_path: str | None = None
+    is_email_backed: bool
+    read_at: datetime | None = None
+    created_at: datetime
+
+
+class NotificationListResponse(BaseModel):
+    notifications: list[NotificationResponse]
+    unread_count: int
+
+
+class NotificationSocketTicketResponse(BaseModel):
+    ticket: str
+
+
 class AnnouncementResponse(BaseModel):
     id: UUID
     project_id: UUID

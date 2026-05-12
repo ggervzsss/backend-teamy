@@ -116,6 +116,29 @@ def decode_team_socket_ticket(ticket: str, settings: Settings) -> tuple[UUID, UU
     return user_id, project_id
 
 
+def create_notification_socket_ticket(user_id: UUID, settings: Settings) -> str:
+    now = datetime.now(UTC)
+    payload = {
+        "sub": str(user_id),
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(seconds=60)).timestamp()),
+        "typ": "notification_socket",
+    }
+    return jwt.encode(payload, settings.secret_key, algorithm=ALGORITHM)
+
+
+def decode_notification_socket_ticket(ticket: str, settings: Settings) -> UUID:
+    try:
+        payload = jwt.decode(ticket, settings.secret_key, algorithms=[ALGORITHM])
+        user_id = UUID(payload["sub"])
+    except (KeyError, ValueError, jwt.PyJWTError) as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid notification socket ticket") from exc
+
+    if payload.get("typ") != "notification_socket":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid notification socket ticket")
+    return user_id
+
+
 def set_session_cookie(response: Response, token: str, settings: Settings) -> None:
     response.set_cookie(
         key=settings.session_cookie_name,

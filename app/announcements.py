@@ -12,7 +12,7 @@ from app.config import get_settings
 from app.database import SessionLocal, get_db
 from app.dependencies import get_current_user
 from app.models import Announcement, AnnouncementRead, Project, ProjectMember, User
-from app.notifications import get_project_member_recipients, send_announcement_email
+from app.notifications import create_user_notifications, get_project_member_recipients, send_announcement_email
 from app.projects import get_project_membership, require_project_active
 from app.schemas import (
     AnnouncementCreateRequest,
@@ -77,6 +77,11 @@ async def mark_announcement_read(db: AsyncSession, announcement_id: UUID, user_i
     db.add(read)
     await db.flush()
     return True, read_at
+
+
+async def get_project_member_user_ids(db: AsyncSession, project_id: UUID) -> set[UUID]:
+    result = await db.execute(select(ProjectMember.user_id).where(ProjectMember.project_id == project_id))
+    return set(result.scalars().all())
 
 
 async def serialize_announcement(db: AsyncSession, announcement: Announcement, user_id: UUID, is_read: bool | None = None) -> AnnouncementResponse:
@@ -167,6 +172,16 @@ async def create_announcement(
     db.add(announcement)
     await db.flush()
     await mark_announcement_read(db, announcement.id, user.id)
+    await create_user_notifications(
+        db,
+        await get_project_member_user_ids(db, project.id),
+        project_id=project.id,
+        kind="announcement.created",
+        title=f"New announcement: {announcement.title}",
+        body=announcement.body,
+        target_path=f"/projects/{project.id}/announcements",
+        is_email_backed=True,
+    )
     await db.commit()
     await db.refresh(announcement)
 

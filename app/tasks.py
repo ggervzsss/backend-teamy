@@ -14,6 +14,7 @@ from app.dependencies import get_current_user
 from app.html_sanitizer import sanitize_html
 from app.models import FileResource, Project, ProjectMember, Task, TaskAssignee, TaskFileLink, User
 from app.notifications import (
+    create_user_notifications,
     get_project_leader_recipients,
     get_user_recipients,
     send_task_assignment_email,
@@ -79,6 +80,11 @@ def require_leader(membership: ProjectMember) -> None:
 
 async def get_project_member_user_ids(db: AsyncSession, project_id: UUID) -> set[UUID]:
     result = await db.execute(select(ProjectMember.user_id).where(ProjectMember.project_id == project_id))
+    return set(result.scalars().all())
+
+
+async def get_project_leader_user_ids(db: AsyncSession, project_id: UUID) -> set[UUID]:
+    result = await db.execute(select(ProjectMember.user_id).where(ProjectMember.project_id == project_id, ProjectMember.role == "leader"))
     return set(result.scalars().all())
 
 
@@ -297,6 +303,16 @@ async def create_task(
         await db.flush()
         db.add(TaskFileLink(task_id=task.id, file_resource_id=resource.id))
 
+    await create_user_notifications(
+        db,
+        set(assignee_ids),
+        project_id=project.id,
+        kind="task.assigned",
+        title=f"New task assigned: {task.title}",
+        body=f"You have been assigned to {task.title} in {project.name}.",
+        target_path=f"/projects/{project.id}/task-board",
+        is_email_backed=True,
+    )
     await db.commit()
     await db.refresh(task)
     response = await serialize_task(db, task)
@@ -369,6 +385,17 @@ async def update_task(
         task.reviewed_by_user_id = None
         task.reviewed_at = None
 
+    if newly_assigned_user_ids:
+        await create_user_notifications(
+            db,
+            newly_assigned_user_ids,
+            project_id=project.id,
+            kind="task.assigned",
+            title=f"New task assigned: {task.title}",
+            body=f"You have been assigned to {task.title} in {project.name}.",
+            target_path=f"/projects/{project.id}/task-board",
+            is_email_backed=True,
+        )
     await db.commit()
     await db.refresh(task)
     response = await serialize_task(db, task)
@@ -457,11 +484,28 @@ async def update_my_task_status(
     assignee.status = payload.status
     assignee.completed_at = datetime.now(UTC) if payload.status == "ready_for_review" else None
     await move_task_after_assignee_update(db, task)
+    is_ready_notification_needed = False
+    leader_user_ids: set[UUID] = set()
+    if not was_ready_for_review:
+        assignee_result_for_notification = await db.execute(select(TaskAssignee).where(TaskAssignee.task_id == task.id))
+        is_ready_notification_needed = all(task_assignee.status == "ready_for_review" for task_assignee in assignee_result_for_notification.scalars().all())
+        if is_ready_notification_needed:
+            leader_user_ids = await get_project_leader_user_ids(db, project.id)
+            await create_user_notifications(
+                db,
+                leader_user_ids,
+                project_id=project.id,
+                kind="task.ready_for_review",
+                title=f"Task ready for review: {task.title}",
+                body=f"All assignees have marked {task.title} as ready for review in {project.name}.",
+                target_path=f"/projects/{project.id}/task-board",
+                is_email_backed=True,
+            )
     await db.commit()
     await db.refresh(task)
     response = await serialize_task(db, task)
     is_ready_for_review = all(task_assignee.status == "ready_for_review" for task_assignee in response.assignees)
-    if not was_ready_for_review and is_ready_for_review:
+    if is_ready_notification_needed and is_ready_for_review:
         recipients = await get_project_leader_recipients(db, project.id)
         background_tasks.add_task(send_task_ready_for_review_email, settings, recipients, project.id, project.name, task.title)
     await manager.broadcast(project.id, "task.updated", response)
@@ -528,9 +572,20 @@ async def review_task(
         task.reviewed_at = None
         task.review_remarks = payload.remarks.strip() if payload.remarks else None
         assignee_result = await db.execute(select(TaskAssignee).where(TaskAssignee.task_id == task.id))
-        for assignee in assignee_result.scalars().all():
+        task_assignees = assignee_result.scalars().all()
+        for assignee in task_assignees:
             assignee.status = "in_progress"
             assignee.completed_at = None
+        await create_user_notifications(
+            db,
+            {assignee.user_id for assignee in task_assignees},
+            project_id=project.id,
+            kind="task.changes_requested",
+            title=f"Changes requested: {task.title}",
+            body=task.review_remarks or f"{task.title} needs revisions or additional changes.",
+            target_path=f"/projects/{project.id}/task-board",
+            is_email_backed=True,
+        )
 
     await db.commit()
     await db.refresh(task)
