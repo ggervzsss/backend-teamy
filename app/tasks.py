@@ -29,6 +29,7 @@ from app.schemas import (
     TaskAssigneeResponse,
     TaskAssigneeUpdateRequest,
     TaskCreateRequest,
+    TaskExistingFileLinkRequest,
     TaskLinkedFileCreateRequest,
     TaskListResponse,
     TaskResponse,
@@ -399,6 +400,32 @@ async def link_task_file(
     db.add(TaskFileLink(task_id=task.id, file_resource_id=resource.id))
     await db.commit()
     await db.refresh(task)
+    response = await serialize_task(db, task)
+    await manager.broadcast(project.id, "task.updated", response)
+    return response
+
+
+@router.post("/tasks/{task_id}/linked-files/existing", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
+async def link_existing_task_file(
+    task_id: UUID,
+    payload: TaskExistingFileLinkRequest,
+    membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
+    db: AsyncSession = Depends(get_db),
+) -> TaskResponse:
+    project, _ = membership
+    require_project_active(project)
+    task = await get_task_for_project(db, project.id, task_id)
+    resource_result = await db.execute(select(FileResource).where(FileResource.project_id == project.id, FileResource.id == payload.file_id))
+    resource = resource_result.scalar_one_or_none()
+    if resource is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File resource not found")
+
+    existing_link_result = await db.execute(select(TaskFileLink).where(TaskFileLink.task_id == task.id, TaskFileLink.file_resource_id == resource.id))
+    if existing_link_result.scalar_one_or_none() is None:
+        db.add(TaskFileLink(task_id=task.id, file_resource_id=resource.id))
+        await db.commit()
+        await db.refresh(task)
+
     response = await serialize_task(db, task)
     await manager.broadcast(project.id, "task.updated", response)
     return response

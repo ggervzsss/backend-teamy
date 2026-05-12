@@ -165,6 +165,10 @@ class TaskLinkedFileCreateRequest(BaseModel):
     url: str | None = Field(default=None, max_length=2048)
 
 
+class TaskExistingFileLinkRequest(BaseModel):
+    file_id: UUID
+
+
 class TaskResponse(BaseModel):
     id: UUID
     project_id: UUID
