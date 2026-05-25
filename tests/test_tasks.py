@@ -1,19 +1,14 @@
 import pytest
 
 
-PASSWORD = "password123"
-
-
 async def signup(client, email: str, full_name: str):
-    response = await client.post("/auth/signup", json={"full_name": full_name, "email": email, "password": PASSWORD})
-    assert response.status_code == 201
-    return response.json()["user"]
+    user = await client._get_or_create_user(email, full_name)
+    return {"id": str(user.id), "email": user.email, "full_name": user.full_name}
 
 
-async def login(client, email: str):
-    response = await client.post("/auth/login", json={"email": email, "password": PASSWORD})
-    assert response.status_code == 200
-    return response.json()["user"]
+async def login(client, email: str, full_name: str = "Test User"):
+    user = await client._login_user(email, full_name)
+    return {"id": str(user.id), "email": user.email, "full_name": user.full_name}
 
 
 async def logout(client):
@@ -23,22 +18,25 @@ async def logout(client):
 
 async def setup_project_with_members(client):
     leader = await signup(client, "leader@example.com", "Leader User")
+    await login(client, leader["email"], leader["full_name"])
     created = await client.post("/projects", json={"name": "Task Project"})
     assert created.status_code == 201
     project = created.json()
     await logout(client)
 
     member_one = await signup(client, "member-one@example.com", "Member One")
+    await login(client, member_one["email"], member_one["full_name"])
     joined = await client.post("/projects/join", json={"teamy_code": project["teamy_code"]})
     assert joined.status_code == 200
     await logout(client)
 
     member_two = await signup(client, "member-two@example.com", "Member Two")
+    await login(client, member_two["email"], member_two["full_name"])
     joined = await client.post("/projects/join", json={"teamy_code": project["teamy_code"]})
     assert joined.status_code == 200
     await logout(client)
 
-    await login(client, leader["email"])
+    await login(client, leader["email"], leader["full_name"])
     return project, leader, member_one, member_two
 
 
@@ -71,7 +69,7 @@ async def test_leader_can_create_task_assigned_to_multiple_members(client):
 async def test_project_member_can_request_task_socket_ticket(client):
     project, _, member_one, _ = await setup_project_with_members(client)
     await logout(client)
-    await login(client, member_one["email"])
+    await login(client, member_one["email"], member_one["full_name"])
 
     response = await client.get(f"/projects/{project['id']}/tasks/ws-ticket")
 
@@ -83,7 +81,7 @@ async def test_project_member_can_request_task_socket_ticket(client):
 async def test_project_members_can_create_tasks_but_cannot_review(client):
     project, leader, member_one, _ = await setup_project_with_members(client)
     await logout(client)
-    await login(client, member_one["email"])
+    await login(client, member_one["email"], member_one["full_name"])
 
     create_response = await client.post(
         f"/projects/{project['id']}/tasks",
@@ -98,7 +96,7 @@ async def test_project_members_can_create_tasks_but_cannot_review(client):
     assert review_response.status_code == 403
     await logout(client)
 
-    await login(client, leader["email"])
+    await login(client, leader["email"], leader["full_name"])
     approved = await client.post(f"/projects/{project['id']}/tasks/{task_id}/review", json={"action": "approve"})
     assert approved.status_code == 200
     assert approved.json()["status"] == "done"
@@ -114,7 +112,7 @@ async def test_member_readiness_requires_explicit_submit_for_review(client):
     task_id = created.json()["id"]
     await logout(client)
 
-    await login(client, member_one["email"])
+    await login(client, member_one["email"], member_one["full_name"])
     first_update = await client.patch(f"/projects/{project['id']}/tasks/{task_id}/assignees/me", json={"status": "ready_for_review"})
     assert first_update.status_code == 200
     assert first_update.json()["status"] == "in_progress"
@@ -122,7 +120,7 @@ async def test_member_readiness_requires_explicit_submit_for_review(client):
     assert early_submit.status_code == 400
     await logout(client)
 
-    await login(client, member_two["email"])
+    await login(client, member_two["email"], member_two["full_name"])
     second_update = await client.patch(f"/projects/{project['id']}/tasks/{task_id}/assignees/me", json={"status": "ready_for_review"})
     assert second_update.status_code == 200
     assert second_update.json()["status"] == "in_progress"
@@ -131,7 +129,7 @@ async def test_member_readiness_requires_explicit_submit_for_review(client):
     assert submitted.json()["status"] == "for_review"
     await logout(client)
 
-    await login(client, leader["email"])
+    await login(client, leader["email"], leader["full_name"])
     approved = await client.post(f"/projects/{project['id']}/tasks/{task_id}/review", json={"action": "approve"})
     assert approved.status_code == 200
     assert approved.json()["status"] == "done"
@@ -148,15 +146,15 @@ async def test_request_changes_resets_assignees_to_progress(client):
     task_id = created.json()["id"]
     await logout(client)
 
-    await login(client, member_one["email"])
+    await login(client, member_one["email"], member_one["full_name"])
     await client.patch(f"/projects/{project['id']}/tasks/{task_id}/assignees/me", json={"status": "ready_for_review"})
     await logout(client)
-    await login(client, member_two["email"])
+    await login(client, member_two["email"], member_two["full_name"])
     await client.patch(f"/projects/{project['id']}/tasks/{task_id}/assignees/me", json={"status": "ready_for_review"})
     await client.post(f"/projects/{project['id']}/tasks/{task_id}/submit-review")
     await logout(client)
 
-    await login(client, leader["email"])
+    await login(client, leader["email"], leader["full_name"])
     reviewed = await client.post(f"/projects/{project['id']}/tasks/{task_id}/review", json={"action": "request_changes", "remarks": "Please tighten the conclusion."})
 
     assert reviewed.status_code == 200
@@ -177,7 +175,7 @@ async def test_task_stays_in_progress_until_every_assignee_is_ready(client):
     task_id = created.json()["id"]
     await logout(client)
 
-    await login(client, member_one["email"])
+    await login(client, member_one["email"], member_one["full_name"])
     updated = await client.patch(f"/projects/{project['id']}/tasks/{task_id}/assignees/me", json={"status": "ready_for_review"})
 
     assert updated.status_code == 200
@@ -195,7 +193,7 @@ async def test_task_stays_in_progress_until_every_assignee_is_ready(client):
 async def test_creator_or_leader_can_edit_task_details(client):
     project, leader, member_one, member_two = await setup_project_with_members(client)
     await logout(client)
-    await login(client, member_one["email"])
+    await login(client, member_one["email"], member_one["full_name"])
     created = await client.post(
         f"/projects/{project['id']}/tasks",
         json={"title": "Draft outline", "assignee_ids": [member_one["id"]], "priority": "low"},
@@ -212,7 +210,7 @@ async def test_creator_or_leader_can_edit_task_details(client):
     assert {assignee["user"]["id"] for assignee in creator_update.json()["assignees"]} == {member_one["id"], member_two["id"]}
     await logout(client)
 
-    await login(client, leader["email"])
+    await login(client, leader["email"], leader["full_name"])
     leader_update = await client.patch(f"/projects/{project['id']}/tasks/{task_id}", json={"description": "Use the latest project template."})
     assert leader_update.status_code == 200
     assert leader_update.json()["description"] == "Use the latest project template."
@@ -228,7 +226,7 @@ async def test_assigned_member_can_link_external_resource_to_task(client):
     task_id = created.json()["id"]
     await logout(client)
 
-    await login(client, member_one["email"])
+    await login(client, member_one["email"], member_one["full_name"])
     linked = await client.post(
         f"/projects/{project['id']}/tasks/{task_id}/linked-files",
         json={"mode": "link", "title": "Design brief", "url": "https://example.com/brief"},

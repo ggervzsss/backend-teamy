@@ -1,9 +1,8 @@
 import pytest
 
 
-async def signup(client, email: str):
-    response = await client.post("/auth/signup", json={"full_name": "Project User", "email": email, "password": "password123"})
-    assert response.status_code == 201
+async def signup(client, email: str, full_name: str = "Project User"):
+    await client._login_user(email, full_name)
 
 
 @pytest.mark.asyncio

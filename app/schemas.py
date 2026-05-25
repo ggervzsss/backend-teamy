@@ -11,34 +11,8 @@ class ApiModel(BaseModel):
     model_config = ConfigDict(from_attributes=True, json_encoders={datetime: utc_isoformat})
 
 
-class SignupRequest(BaseModel):
-    full_name: str = Field(min_length=1, max_length=160)
-    email: EmailStr
-    password: str = Field(min_length=8, max_length=128)
-    verification_code: str | None = Field(default=None, min_length=4, max_length=12)
-
-
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=1, max_length=128)
-
-
-class SignupVerificationCodeRequest(BaseModel):
-    email: EmailStr
-
-
-class SignupVerificationCodeResponse(ApiModel):
-    detail: str
-    expires_in_seconds: int
-
-
 class UserProfileUpdateRequest(BaseModel):
     full_name: str | None = Field(default=None, min_length=1, max_length=160)
-
-
-class PasswordChangeRequest(BaseModel):
-    current_password: str = Field(min_length=1, max_length=128)
-    new_password: str = Field(min_length=8, max_length=128)
 
 
 class UserResponse(ApiModel):

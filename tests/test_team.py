@@ -1,19 +1,14 @@
 import pytest
 
 
-PASSWORD = "password123"
-
-
 async def signup(client, email: str, full_name: str):
-    response = await client.post("/auth/signup", json={"full_name": full_name, "email": email, "password": PASSWORD})
-    assert response.status_code == 201
-    return response.json()["user"]
+    user = await client._get_or_create_user(email, full_name)
+    return {"id": str(user.id), "email": user.email, "full_name": user.full_name}
 
 
-async def login(client, email: str):
-    response = await client.post("/auth/login", json={"email": email, "password": PASSWORD})
-    assert response.status_code == 200
-    return response.json()["user"]
+async def login(client, email: str, full_name: str = "Test User"):
+    user = await client._login_user(email, full_name)
+    return {"id": str(user.id), "email": user.email, "full_name": user.full_name}
 
 
 async def logout(client):
@@ -23,17 +18,19 @@ async def logout(client):
 
 async def setup_project(client):
     leader = await signup(client, "team-leader@example.com", "Team Leader")
+    await login(client, leader["email"], leader["full_name"])
     created = await client.post("/projects", json={"name": "Team Project"})
     assert created.status_code == 201
     project = created.json()
     await logout(client)
 
     member = await signup(client, "team-member@example.com", "Team Member")
+    await login(client, member["email"], member["full_name"])
     joined = await client.post("/projects/join", json={"teamy_code": project["teamy_code"]})
     assert joined.status_code == 200
     await logout(client)
 
-    await login(client, leader["email"])
+    await login(client, leader["email"], leader["full_name"])
     return project, member
 
 
@@ -41,7 +38,7 @@ async def setup_project(client):
 async def test_project_member_can_request_team_socket_ticket(client):
     project, member = await setup_project(client)
     await logout(client)
-    await login(client, member["email"])
+    await login(client, member["email"], member["full_name"])
 
     response = await client.get(f"/projects/{project['id']}/members/ws-ticket")
 
@@ -53,7 +50,7 @@ async def test_project_member_can_request_team_socket_ticket(client):
 async def test_project_member_can_list_presence_roster(client):
     project, member = await setup_project(client)
     await logout(client)
-    await login(client, member["email"])
+    await login(client, member["email"], member["full_name"])
 
     response = await client.get(f"/projects/{project['id']}/members/presence")
 
