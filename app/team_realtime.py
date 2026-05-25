@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import ProjectMember, User
 from app.schemas import ProjectMemberPresenceResponse, ProjectMemberResponse
 from app.user_responses import serialize_project_user
+from app.time_utils import ensure_utc
 
 
 class TeamConnectionManager:
@@ -102,7 +103,7 @@ async def serialize_project_presence_members(db: AsyncSession, project_id: UUID)
             nickname=member.nickname,
             joined_at=member.joined_at,
             is_online=manager.is_user_online(project_id, user.id),
-            last_online_at=user.last_online_at,
+            last_online_at=ensure_utc(user.last_online_at),
         )
         for member, user in result.all()
     ]
