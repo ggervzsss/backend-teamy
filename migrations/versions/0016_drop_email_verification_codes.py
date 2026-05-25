@@ -1,6 +1,6 @@
 """drop email verification codes
 
-Revision ID: 0016_drop_email_verification_codes
+Revision ID: 0016_drop_email_ver_codes
 Revises: 0015_add_task_start_date
 Create Date: 2026-05-25 00:00:00.000000
 """
@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from alembic import op
 
 
-revision: str = "0016_drop_email_verification_codes"
+revision: str = "0016_drop_email_ver_codes"
 down_revision: str | None = "0015_add_task_start_date"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
