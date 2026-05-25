@@ -221,9 +221,20 @@ def normalize_recipients(recipients: list[EmailRecipient]) -> list[EmailRecipien
     return list(deduped.values())
 
 
-async def send_email(settings: Settings, recipients: list[EmailRecipient], subject: str, html_body: str, text_body: str) -> None:
+async def send_email(
+    settings: Settings,
+    recipients: list[EmailRecipient],
+    subject: str,
+    html_body: str,
+    text_body: str,
+    *,
+    raise_on_error: bool = False,
+) -> None:
     if not settings.resend_api_key:
-        logger.info("Skipping email notification because RESEND_API_KEY is not configured")
+        message = "Skipping email notification because RESEND_API_KEY is not configured"
+        logger.info(message)
+        if raise_on_error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Email delivery is not configured")
         return
 
     unique_recipients = normalize_recipients(recipients)
@@ -244,8 +255,22 @@ async def send_email(settings: Settings, recipients: list[EmailRecipient], subje
             try:
                 response = await client.post("https://api.resend.com/emails", headers=headers, json=payload)
                 response.raise_for_status()
-            except httpx.HTTPError:
-                logger.exception("Could not send Teamy notification email to %s", recipient.email)
+            except httpx.HTTPStatusError as exc:
+                logger.exception(
+                    "Could not send Teamy email to %s. Resend responded with %s: %s",
+                    recipient.email,
+                    exc.response.status_code,
+                    exc.response.text,
+                )
+                if raise_on_error:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail="Email provider rejected the message. Check RESEND_FROM_EMAIL and Resend domain verification.",
+                    ) from exc
+            except httpx.HTTPError as exc:
+                logger.exception("Could not send Teamy email to %s", recipient.email)
+                if raise_on_error:
+                    raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Email provider could not be reached") from exc
 
 
 async def get_project_member_recipients(db: AsyncSession, project_id: UUID) -> list[EmailRecipient]:

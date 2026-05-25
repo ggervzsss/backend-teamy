@@ -19,6 +19,7 @@ async def client() -> AsyncGenerator[AsyncClient, None]:
         secret_key="test-secret-key-that-is-long-enough",
         google_client_id="google-client",
         google_client_secret="google-secret",
+        signup_email_verification_required=False,
     )
 
     async with engine.begin() as conn:
@@ -32,6 +33,7 @@ async def client() -> AsyncGenerator[AsyncClient, None]:
     app.dependency_overrides[get_settings] = lambda: settings
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as test_client:
+        test_client._teamy_settings = settings
         yield test_client
 
     app.dependency_overrides.clear()

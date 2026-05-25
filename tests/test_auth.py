@@ -38,6 +38,67 @@ async def test_duplicate_signup_is_rejected(client):
 
 
 @pytest.mark.asyncio
+async def test_local_signup_requires_email_verification_code(client, monkeypatch):
+    client._teamy_settings.signup_email_verification_required = True
+    client._teamy_settings.resend_api_key = "resend-test-key"
+    sent_codes = []
+
+    async def fake_send(settings, email, code):
+        sent_codes.append({"email": email, "code": code})
+
+    monkeypatch.setattr("app.auth.send_signup_verification_email", fake_send)
+
+    code_response = await client.post("/auth/signup/verification", json={"email": "Jane@Example.com"})
+    missing_code_response = await client.post(
+        "/auth/signup",
+        json={"full_name": "Jane Doe", "email": "Jane@Example.com", "password": "password123"},
+    )
+    wrong_code_response = await client.post(
+        "/auth/signup",
+        json={"full_name": "Jane Doe", "email": "Jane@Example.com", "password": "password123", "verification_code": "000000"},
+    )
+    signup_response = await client.post(
+        "/auth/signup",
+        json={"full_name": "Jane Doe", "email": "Jane@Example.com", "password": "password123", "verification_code": sent_codes[0]["code"]},
+    )
+
+    assert code_response.status_code == 202
+    assert sent_codes[0]["email"] == "jane@example.com"
+    assert len(sent_codes[0]["code"]) == 6
+    assert missing_code_response.status_code == 400
+    assert wrong_code_response.status_code == 400
+    assert signup_response.status_code == 201
+    assert signup_response.json()["user"]["email"] == "jane@example.com"
+
+
+@pytest.mark.asyncio
+async def test_signup_verification_code_requires_email_delivery_configuration(client):
+    client._teamy_settings.signup_email_verification_required = True
+    client._teamy_settings.resend_api_key = ""
+
+    response = await client.post("/auth/signup/verification", json={"email": "jane@example.com"})
+
+    assert response.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_signup_verification_code_surfaces_email_delivery_failure(client, monkeypatch):
+    client._teamy_settings.signup_email_verification_required = True
+    client._teamy_settings.resend_api_key = "resend-test-key"
+
+    async def fake_send(settings, email, code):
+        from fastapi import HTTPException, status
+
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Email provider rejected the message")
+
+    monkeypatch.setattr("app.auth.send_signup_verification_email", fake_send)
+
+    response = await client.post("/auth/signup/verification", json={"email": "jane@example.com"})
+
+    assert response.status_code == 502
+
+
+@pytest.mark.asyncio
 async def test_invalid_login_is_rejected(client):
     response = await client.post("/auth/login", json={"email": "missing@example.com", "password": "wrong"})
     assert response.status_code == 401

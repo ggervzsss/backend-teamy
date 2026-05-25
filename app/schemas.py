@@ -9,11 +9,21 @@ class SignupRequest(BaseModel):
     full_name: str = Field(min_length=1, max_length=160)
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
+    verification_code: str | None = Field(default=None, min_length=4, max_length=12)
 
 
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=1, max_length=128)
+
+
+class SignupVerificationCodeRequest(BaseModel):
+    email: EmailStr
+
+
+class SignupVerificationCodeResponse(BaseModel):
+    detail: str
+    expires_in_seconds: int
 
 
 class UserProfileUpdateRequest(BaseModel):
@@ -175,6 +185,7 @@ class TaskResponse(BaseModel):
     title: str
     description: str | None = None
     priority: TaskPriority
+    start_date: date
     due_date: date | None = None
     status: TaskStatus
     created_by: UserResponse
@@ -260,6 +271,7 @@ class TaskCreateRequest(BaseModel):
     description: str | None = Field(default=None, max_length=4000)
     assignee_ids: list[UUID] = Field(min_length=1)
     priority: TaskPriority = "medium"
+    start_date: date | None = None
     due_date: date | None = None
     initial_status: Literal["todo", "in_progress"] = "todo"
     linked_file: TaskLinkedFileCreateRequest | None = None
@@ -270,6 +282,7 @@ class TaskUpdateRequest(BaseModel):
     description: str | None = Field(default=None, max_length=4000)
     assignee_ids: list[UUID] | None = None
     priority: TaskPriority | None = None
+    start_date: date | None = None
     due_date: date | None = None
 
 

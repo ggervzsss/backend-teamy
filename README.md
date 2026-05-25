@@ -28,6 +28,8 @@ uv run uvicorn app.main:app --reload
 
 Set `RESEND_API_KEY` and `RESEND_FROM_EMAIL` in the backend environment to enable email notifications. `RESEND_FROM_EMAIL` should use a sender/domain verified in Resend for production.
 
+Local email signup also uses Resend. When `SIGNUP_EMAIL_VERIFICATION_REQUIRED=true`, `/auth/signup/verification` returns `503` until `RESEND_API_KEY` is configured. Resend's `onboarding@resend.dev` sender is only for testing to your own Resend account email; use a verified domain sender such as `Teamy <noreply@your-verified-domain.com>` for other recipients.
+
 Task and announcement event emails are queued automatically by the API. Due-date reminders are queued by calling:
 
 ```powershell

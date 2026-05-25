@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     cloudinary_secure: bool = True
     resend_api_key: str = ""
     resend_from_email: str = "Teamy <onboarding@resend.dev>"
+    signup_email_verification_required: bool = True
+    signup_verification_code_ttl_seconds: int = 10 * 60
+    signup_verification_max_attempts: int = 5
+    signup_verification_code_length: int = 6
     notification_reminder_secret: str = ""
     notification_reminder_timezone: str = "Asia/Manila"
     database_ssl: bool = False

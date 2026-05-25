@@ -1,25 +1,39 @@
+from datetime import UTC, datetime, timedelta
+import html
 from typing import Annotated
 from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.cloudinary import delete_profile_avatar, upload_profile_avatar
 from app.config import Settings, get_settings
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models import User
-from app.schemas import AuthResponse, LoginRequest, PasswordChangeRequest, SignupRequest, UserProfileUpdateRequest
+from app.models import EmailVerificationCode, User
+from app.notifications import EmailRecipient, build_email_shell, send_email
+from app.schemas import (
+    AuthResponse,
+    LoginRequest,
+    PasswordChangeRequest,
+    SignupRequest,
+    SignupVerificationCodeRequest,
+    SignupVerificationCodeResponse,
+    UserProfileUpdateRequest,
+)
 from app.security import (
     clear_session_cookie,
+    create_email_verification_code,
     create_oauth_state,
     create_session_token,
     decode_oauth_state,
+    hash_email_verification_code,
     hash_password,
     set_session_cookie,
+    verify_email_verification_code,
     verify_password,
 )
 from app.user_responses import serialize_account_user
@@ -38,12 +52,99 @@ def issue_session(response: Response, user: User, settings: Settings) -> None:
     set_session_cookie(response, create_session_token(user.id, settings), settings)
 
 
+def ensure_aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+async def send_signup_verification_email(settings: Settings, email: str, code: str) -> None:
+    safe_code = html.escape(code)
+    expires_in_minutes = max(1, settings.signup_verification_code_ttl_seconds // 60)
+    body = f"<p>Use this code to finish creating your Teamy account:</p><p style=\"font-size:24px;font-weight:700;letter-spacing:4px\">{safe_code}</p><p>This code expires in {expires_in_minutes} minutes.</p>"
+    text = f"Use this code to finish creating your Teamy account: {code}\n\nThis code expires in {expires_in_minutes} minutes."
+    await send_email(
+        settings,
+        [EmailRecipient(email=email, full_name=email)],
+        "Your Teamy verification code",
+        build_email_shell("Verify your email", body, str(settings.frontend_url).rstrip("/"), "Open Teamy"),
+        text,
+        raise_on_error=True,
+    )
+
+
+async def require_valid_signup_verification(db: AsyncSession, email: str, code: str | None, settings: Settings) -> None:
+    if not settings.signup_email_verification_required:
+        return
+    if not code:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email verification code is required")
+
+    result = await db.execute(
+        select(EmailVerificationCode)
+        .where(EmailVerificationCode.email == email, EmailVerificationCode.consumed_at.is_(None))
+        .order_by(EmailVerificationCode.created_at.desc())
+        .limit(1)
+    )
+    verification = result.scalar_one_or_none()
+    now = datetime.now(UTC)
+
+    if verification is None or ensure_aware_utc(verification.expires_at) < now:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired verification code")
+    if verification.attempts >= settings.signup_verification_max_attempts:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Too many incorrect verification attempts")
+    if not verify_email_verification_code(email, code, verification.code_hash, settings):
+        verification.attempts += 1
+        await db.commit()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired verification code")
+
+    verification.consumed_at = now
+
+
+@router.post("/signup/verification", response_model=SignupVerificationCodeResponse, status_code=status.HTTP_202_ACCEPTED)
+async def send_signup_verification_code(
+    payload: SignupVerificationCodeRequest,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> SignupVerificationCodeResponse:
+    email = payload.email.lower()
+    existing_user = await get_user_by_email(db, email)
+    if existing_user is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An account with this email already exists")
+    if settings.signup_email_verification_required and not settings.resend_api_key:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Email verification is not configured")
+
+    now = datetime.now(UTC)
+    code = create_email_verification_code(settings.signup_verification_code_length)
+    await db.execute(
+        update(EmailVerificationCode)
+        .where(EmailVerificationCode.email == email, EmailVerificationCode.consumed_at.is_(None))
+        .values(consumed_at=now)
+    )
+    db.add(
+        EmailVerificationCode(
+            email=email,
+            code_hash=hash_email_verification_code(email, code, settings),
+            expires_at=now + timedelta(seconds=settings.signup_verification_code_ttl_seconds),
+        )
+    )
+
+    try:
+        await send_signup_verification_email(settings, email, code)
+    except HTTPException:
+        await db.rollback()
+        raise
+
+    await db.commit()
+    return SignupVerificationCodeResponse(detail="Verification code sent", expires_in_seconds=settings.signup_verification_code_ttl_seconds)
+
+
 @router.post("/signup", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
 async def signup(payload: SignupRequest, response: Response, db: AsyncSession = Depends(get_db), settings: Settings = Depends(get_settings)) -> AuthResponse:
     email = payload.email.lower()
     existing_user = await get_user_by_email(db, email)
     if existing_user is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An account with this email already exists")
+    await require_valid_signup_verification(db, email, payload.verification_code, settings)
 
     user = User(
         email=email,

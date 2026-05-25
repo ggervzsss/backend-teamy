@@ -185,6 +185,7 @@ async def serialize_task(db: AsyncSession, task: Task) -> TaskResponse:
         title=task.title,
         description=task.description,
         priority=task.priority,
+        start_date=task.start_date,
         due_date=task.due_date,
         status=task.status,
         created_by=serialize_project_user(creator, creator_member),
@@ -287,6 +288,7 @@ async def create_task(
         title=payload.title.strip(),
         description=payload.description.strip() if payload.description else None,
         priority=payload.priority,
+        start_date=payload.start_date if payload.start_date else datetime.now(UTC).date(),
         due_date=payload.due_date,
         status=payload.initial_status,
         created_by_user_id=user.id,
@@ -345,6 +347,8 @@ async def update_task(
         task.description = payload.description.strip() if payload.description else None
     if payload.priority is not None:
         task.priority = payload.priority
+    if "start_date" in payload.model_fields_set:
+        task.start_date = payload.start_date if payload.start_date else datetime.now(UTC).date()
     if "due_date" in payload.model_fields_set:
         task.due_date = payload.due_date
 
