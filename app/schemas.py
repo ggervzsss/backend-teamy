@@ -4,6 +4,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
+from app.time_utils import utc_isoformat
+
+
+class ApiModel(BaseModel):
+    model_config = ConfigDict(from_attributes=True, json_encoders={datetime: utc_isoformat})
+
 
 class SignupRequest(BaseModel):
     full_name: str = Field(min_length=1, max_length=160)
@@ -21,7 +27,7 @@ class SignupVerificationCodeRequest(BaseModel):
     email: EmailStr
 
 
-class SignupVerificationCodeResponse(BaseModel):
+class SignupVerificationCodeResponse(ApiModel):
     detail: str
     expires_in_seconds: int
 
@@ -35,8 +41,7 @@ class PasswordChangeRequest(BaseModel):
     new_password: str = Field(min_length=8, max_length=128)
 
 
-class UserResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class UserResponse(ApiModel):
 
     id: UUID
     email: EmailStr
@@ -47,7 +52,7 @@ class UserResponse(BaseModel):
     last_online_at: datetime | None = None
 
 
-class AuthResponse(BaseModel):
+class AuthResponse(ApiModel):
     user: UserResponse
 
 
@@ -72,7 +77,7 @@ class ProjectDeleteRequest(BaseModel):
     confirm_name: str = Field(min_length=1, max_length=160)
 
 
-class ProjectResponse(BaseModel):
+class ProjectResponse(ApiModel):
     id: UUID
     name: str
     description: str | None = None
@@ -84,7 +89,7 @@ class ProjectResponse(BaseModel):
     updated_at: datetime
 
 
-class ProjectListResponse(BaseModel):
+class ProjectListResponse(ApiModel):
     projects: list[ProjectResponse]
 
 
@@ -94,7 +99,7 @@ AssigneeStatus = Literal["todo", "in_progress", "ready_for_review"]
 FileResourceKind = Literal["doc", "link"]
 
 
-class ProjectMemberResponse(BaseModel):
+class ProjectMemberResponse(ApiModel):
     id: UUID
     user: UserResponse
     role: str
@@ -102,7 +107,7 @@ class ProjectMemberResponse(BaseModel):
     joined_at: datetime
 
 
-class ProjectMemberListResponse(BaseModel):
+class ProjectMemberListResponse(ApiModel):
     members: list[ProjectMemberResponse]
 
 
@@ -111,11 +116,11 @@ class ProjectMemberPresenceResponse(ProjectMemberResponse):
     last_online_at: datetime | None = None
 
 
-class ProjectPresenceResponse(BaseModel):
+class ProjectPresenceResponse(ApiModel):
     members: list[ProjectMemberPresenceResponse]
 
 
-class TeamSocketTicketResponse(BaseModel):
+class TeamSocketTicketResponse(ApiModel):
     ticket: str
 
 
@@ -123,20 +128,20 @@ class ProjectMemberNicknameUpdateRequest(BaseModel):
     nickname: str | None = Field(default=None, max_length=40)
 
 
-class TaskAssigneeResponse(BaseModel):
+class TaskAssigneeResponse(ApiModel):
     id: UUID
     user: UserResponse
     status: AssigneeStatus
     completed_at: datetime | None = None
 
 
-class LinkedTaskResponse(BaseModel):
+class LinkedTaskResponse(ApiModel):
     id: UUID
     title: str
     status: TaskStatus
 
 
-class FileResourceSummaryResponse(BaseModel):
+class FileResourceSummaryResponse(ApiModel):
     id: UUID
     project_id: UUID
     title: str
@@ -152,7 +157,7 @@ class FileResourceResponse(FileResourceSummaryResponse):
     content_html: str | None = None
 
 
-class FileResourceListResponse(BaseModel):
+class FileResourceListResponse(ApiModel):
     files: list[FileResourceSummaryResponse]
 
 
@@ -179,7 +184,7 @@ class TaskExistingFileLinkRequest(BaseModel):
     file_id: UUID
 
 
-class TaskResponse(BaseModel):
+class TaskResponse(ApiModel):
     id: UUID
     project_id: UUID
     title: str
@@ -198,11 +203,11 @@ class TaskResponse(BaseModel):
     updated_at: datetime
 
 
-class TaskListResponse(BaseModel):
+class TaskListResponse(ApiModel):
     tasks: list[TaskResponse]
 
 
-class TaskSocketTicketResponse(BaseModel):
+class TaskSocketTicketResponse(ApiModel):
     ticket: str
 
 
@@ -224,7 +229,7 @@ class AnnouncementPinRequest(BaseModel):
     is_pinned: bool
 
 
-class NotificationResponse(BaseModel):
+class NotificationResponse(ApiModel):
     id: UUID
     project_id: UUID | None = None
     kind: str
@@ -236,16 +241,16 @@ class NotificationResponse(BaseModel):
     created_at: datetime
 
 
-class NotificationListResponse(BaseModel):
+class NotificationListResponse(ApiModel):
     notifications: list[NotificationResponse]
     unread_count: int
 
 
-class NotificationSocketTicketResponse(BaseModel):
+class NotificationSocketTicketResponse(ApiModel):
     ticket: str
 
 
-class AnnouncementResponse(BaseModel):
+class AnnouncementResponse(ApiModel):
     id: UUID
     project_id: UUID
     title: str
@@ -258,11 +263,11 @@ class AnnouncementResponse(BaseModel):
     updated_at: datetime
 
 
-class AnnouncementListResponse(BaseModel):
+class AnnouncementListResponse(ApiModel):
     announcements: list[AnnouncementResponse]
 
 
-class AnnouncementSocketTicketResponse(BaseModel):
+class AnnouncementSocketTicketResponse(ApiModel):
     ticket: str
 
 

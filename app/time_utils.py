@@ -9,3 +9,7 @@ def ensure_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def utc_isoformat(value: datetime) -> str:
+    return ensure_utc(value).isoformat()
