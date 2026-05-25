@@ -1,39 +1,35 @@
 import pytest
 
 
-PASSWORD = "password123"
-
-
 async def signup(client, email: str, full_name: str):
-    response = await client.post("/auth/signup", json={"full_name": full_name, "email": email, "password": PASSWORD})
-    assert response.status_code == 201
-    return response.json()["user"]
+    return await client._get_or_create_user(email, full_name)
 
 
-async def login(client, email: str):
-    response = await client.post("/auth/login", json={"email": email, "password": PASSWORD})
-    assert response.status_code == 200
-    return response.json()["user"]
+async def login(client, email: str, full_name: str = "Test User"):
+    await client._login_user(email, full_name)
 
 
 async def logout(client):
     response = await client.post("/auth/logout")
     assert response.status_code == 204
+    client._logout_user()
 
 
 async def setup_project(client):
     leader = await signup(client, "announce-leader@example.com", "Announce Leader")
+    await client._login_user(leader.email, leader.full_name)
     created = await client.post("/projects", json={"name": "Announcement Project"})
     assert created.status_code == 201
     project = created.json()
     await logout(client)
 
     member = await signup(client, "announce-member@example.com", "Announce Member")
+    await client._login_user(member.email, member.full_name)
     joined = await client.post("/projects/join", json={"teamy_code": project["teamy_code"]})
     assert joined.status_code == 200
     await logout(client)
 
-    await login(client, leader["email"])
+    await login(client, leader.email, leader.full_name)
     return project, leader, member
 
 
@@ -41,7 +37,7 @@ async def setup_project(client):
 async def test_project_members_can_create_and_list_announcements(client):
     project, _, member = await setup_project(client)
     await logout(client)
-    await login(client, member["email"])
+    await login(client, member.email, member.full_name)
 
     created = await client.post(
         f"/projects/{project['id']}/announcements",
@@ -54,7 +50,7 @@ async def test_project_members_can_create_and_list_announcements(client):
     assert body["is_pinned"] is True
     assert body["deadline_date"] == "2026-05-20"
     assert body["is_read"] is True
-    assert body["created_by"]["id"] == member["id"]
+    assert body["created_by"]["id"] == str(member.id)
 
     listed = await client.get(f"/projects/{project['id']}/announcements")
     assert listed.status_code == 200
@@ -72,7 +68,7 @@ async def test_announcement_read_state_is_per_user(client):
     assert created.json()["is_read"] is True
     await logout(client)
 
-    await login(client, member["email"])
+    await login(client, member.email, member.full_name)
     listed_for_member = await client.get(f"/projects/{project['id']}/announcements")
     assert listed_for_member.status_code == 200
     assert listed_for_member.json()["announcements"][0]["is_read"] is False
@@ -85,7 +81,7 @@ async def test_announcement_read_state_is_per_user(client):
     assert listed_after_read.json()["announcements"][0]["is_read"] is True
     await logout(client)
 
-    await login(client, leader["email"])
+    await login(client, leader.email, leader.full_name)
     listed_for_leader = await client.get(f"/projects/{project['id']}/announcements")
     assert listed_for_leader.json()["announcements"][0]["is_read"] is True
 
@@ -100,7 +96,7 @@ async def test_project_members_can_pin_and_unpin_announcements(client):
     announcement_id = created.json()["id"]
     await logout(client)
 
-    await login(client, member["email"])
+    await login(client, member.email, member.full_name)
     pinned = await client.patch(f"/projects/{project['id']}/announcements/{announcement_id}/pin", json={"is_pinned": True})
     assert pinned.status_code == 200
     assert pinned.json()["is_pinned"] is True
@@ -114,7 +110,7 @@ async def test_project_members_can_pin_and_unpin_announcements(client):
 async def test_creator_or_leader_can_edit_announcement(client):
     project, leader, member = await setup_project(client)
     await logout(client)
-    await login(client, member["email"])
+    await login(client, member.email, member.full_name)
     created = await client.post(
         f"/projects/{project['id']}/announcements",
         json={"title": "Draft update", "body": "Initial note."},
@@ -131,7 +127,7 @@ async def test_creator_or_leader_can_edit_announcement(client):
     assert creator_update.json()["deadline_date"] == "2026-05-21"
     await logout(client)
 
-    await login(client, leader["email"])
+    await login(client, leader.email, leader.full_name)
     leader_update = await client.patch(
         f"/projects/{project['id']}/announcements/{announcement_id}",
         json={"body": "Leader clarified note.", "deadline_date": None},
@@ -145,7 +141,8 @@ async def test_creator_or_leader_can_edit_announcement(client):
 async def test_non_members_cannot_access_announcements(client):
     project, _, _ = await setup_project(client)
     await logout(client)
-    await signup(client, "announce-outside@example.com", "Outside User")
+    outsider = await signup(client, "announce-outside@example.com", "Outside User")
+    await client._login_user(outsider.email, outsider.full_name)
 
     response = await client.get(f"/projects/{project['id']}/announcements")
 
@@ -156,7 +153,7 @@ async def test_non_members_cannot_access_announcements(client):
 async def test_project_member_can_request_announcement_socket_ticket(client):
     project, _, member = await setup_project(client)
     await logout(client)
-    await login(client, member["email"])
+    await login(client, member.email, member.full_name)
 
     response = await client.get(f"/projects/{project['id']}/announcements/ws-ticket")
 

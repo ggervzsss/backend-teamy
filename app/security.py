@@ -1,41 +1,12 @@
 from datetime import UTC, datetime, timedelta
-import hashlib
-import hmac
-import secrets
 from uuid import UUID
 
 import jwt
 from fastapi import HTTPException, Response, status
-from passlib.context import CryptContext
 
 from app.config import Settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 ALGORITHM = "HS256"
-
-
-def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
-
-
-def verify_password(password: str, password_hash: str) -> bool:
-    return pwd_context.verify(password, password_hash)
-
-
-def create_email_verification_code(length: int = 6) -> str:
-    bounded_length = min(max(length, 4), 12)
-    return "".join(str(secrets.randbelow(10)) for _ in range(bounded_length))
-
-
-def hash_email_verification_code(email: str, code: str, settings: Settings) -> str:
-    normalized_email = email.strip().lower()
-    normalized_code = "".join(code.split())
-    message = f"signup-email-verification:{normalized_email}:{normalized_code}".encode()
-    return hmac.new(settings.secret_key.encode(), message, hashlib.sha256).hexdigest()
-
-
-def verify_email_verification_code(email: str, code: str, code_hash: str, settings: Settings) -> bool:
-    return hmac.compare_digest(hash_email_verification_code(email, code, settings), code_hash)
 
 
 def create_session_token(user_id: UUID, settings: Settings) -> str:

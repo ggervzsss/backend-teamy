@@ -1,39 +1,35 @@
 import pytest
 
 
-PASSWORD = "password123"
-
-
 async def signup(client, email: str, full_name: str):
-    response = await client.post("/auth/signup", json={"full_name": full_name, "email": email, "password": PASSWORD})
-    assert response.status_code == 201
-    return response.json()["user"]
+    return await client._get_or_create_user(email, full_name)
 
 
-async def login(client, email: str):
-    response = await client.post("/auth/login", json={"email": email, "password": PASSWORD})
-    assert response.status_code == 200
-    return response.json()["user"]
+async def login(client, email: str, full_name: str = "Test User"):
+    await client._login_user(email, full_name)
 
 
 async def logout(client):
     response = await client.post("/auth/logout")
     assert response.status_code == 204
+    client._logout_user()
 
 
 async def setup_project(client):
     leader = await signup(client, "files-leader@example.com", "Files Leader")
+    await client._login_user(leader.email, leader.full_name)
     created = await client.post("/projects", json={"name": "File Project"})
     assert created.status_code == 201
     project = created.json()
     await logout(client)
 
     member = await signup(client, "files-member@example.com", "Files Member")
+    await client._login_user(member.email, member.full_name)
     joined = await client.post("/projects/join", json={"teamy_code": project["teamy_code"]})
     assert joined.status_code == 200
     await logout(client)
 
-    await login(client, leader["email"])
+    await login(client, leader.email, leader.full_name)
     return project, leader, member
 
 
@@ -41,7 +37,7 @@ async def setup_project(client):
 async def test_project_members_can_create_list_open_and_update_docs(client):
     project, _, member = await setup_project(client)
     await logout(client)
-    await login(client, member["email"])
+    await login(client, member.email, member.full_name)
 
     created = await client.post(
         f"/projects/{project['id']}/files",
@@ -105,7 +101,7 @@ async def test_project_members_can_delete_resources_created_by_others(client):
     file_id = created.json()["id"]
 
     await logout(client)
-    await login(client, member["email"])
+    await login(client, member.email, member.full_name)
 
     deleted = await client.delete(f"/projects/{project['id']}/files/{file_id}")
     assert deleted.status_code == 204
@@ -122,7 +118,8 @@ async def test_project_members_can_delete_resources_created_by_others(client):
 async def test_non_members_cannot_access_file_hub(client):
     project, _, _ = await setup_project(client)
     await logout(client)
-    await signup(client, "outside-filehub@example.com", "Outside User")
+    outsider = await signup(client, "outside-filehub@example.com", "Outside User")
+    await client._login_user(outsider.email, outsider.full_name)
 
     response = await client.get(f"/projects/{project['id']}/files")
 
@@ -137,7 +134,7 @@ async def test_creating_task_with_teamy_doc_links_file(client):
         f"/projects/{project['id']}/tasks",
         json={
             "title": "Draft proposal",
-            "assignee_ids": [member["id"]],
+            "assignee_ids": [str(member.id)],
             "linked_file": {"mode": "doc", "title": "Proposal Doc"},
         },
     )
@@ -160,7 +157,7 @@ async def test_creating_task_with_external_link_links_file(client):
         f"/projects/{project['id']}/tasks",
         json={
             "title": "Collect references",
-            "assignee_ids": [member["id"]],
+            "assignee_ids": [str(member.id)],
             "linked_file": {"mode": "link", "title": "Source Folder", "url": "https://example.com/sources"},
         },
     )
@@ -177,10 +174,11 @@ async def test_project_members_can_link_existing_resource_to_task(client):
     project, _, member = await setup_project(client)
     await logout(client)
     other_member = await signup(client, "files-other-member@example.com", "Files Other Member")
+    await client._login_user(other_member.email, other_member.full_name)
     joined = await client.post("/projects/join", json={"teamy_code": project["teamy_code"]})
     assert joined.status_code == 200
     await logout(client)
-    await login(client, "files-leader@example.com")
+    await login(client, "files-leader@example.com", "Files Leader")
 
     resource = await client.post(
         f"/projects/{project['id']}/files",
@@ -190,11 +188,11 @@ async def test_project_members_can_link_existing_resource_to_task(client):
 
     task = await client.post(
         f"/projects/{project['id']}/tasks",
-        json={"title": "Review brief", "assignee_ids": [member["id"]], "priority": "medium", "initial_status": "todo"},
+        json={"title": "Review brief", "assignee_ids": [str(member.id)], "priority": "medium", "initial_status": "todo"},
     )
     assert task.status_code == 201
     await logout(client)
-    await login(client, other_member["email"])
+    await login(client, other_member.email, other_member.full_name)
 
     linked = await client.post(
         f"/projects/{project['id']}/tasks/{task.json()['id']}/linked-files/existing",

@@ -55,6 +55,7 @@ async def test_logout_clears_cookie(client):
 
     response = await client.post("/auth/logout")
     assert response.status_code == 204
+    client._logout_user()
     assert "teamy_session" not in client.cookies
 
 

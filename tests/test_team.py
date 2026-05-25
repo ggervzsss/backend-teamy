@@ -14,6 +14,7 @@ async def login(client, email: str, full_name: str = "Test User"):
 async def logout(client):
     response = await client.post("/auth/logout")
     assert response.status_code == 204
+    client._logout_user()
 
 
 async def setup_project(client):
@@ -85,7 +86,8 @@ async def test_project_member_nickname_is_scoped_to_project_membership(client):
 async def test_non_members_cannot_request_team_socket_ticket(client):
     project, _ = await setup_project(client)
     await logout(client)
-    await signup(client, "team-outsider@example.com", "Team Outsider")
+    outsider = await signup(client, "team-outsider@example.com", "Team Outsider")
+    await client._login_user(outsider["email"], outsider["full_name"])
 
     response = await client.get(f"/projects/{project['id']}/members/ws-ticket")
 
