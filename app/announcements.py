@@ -310,6 +310,46 @@ async def update_announcement_pin(
     return response
 
 
+@router.post("/{announcement_id}/notify", status_code=status.HTTP_204_NO_CONTENT)
+async def notify_announcement(
+    announcement_id: UUID,
+    background_tasks: BackgroundTasks,
+    user: Annotated[User, Depends(get_current_user)],
+    membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
+    db: AsyncSession = Depends(get_db),
+    settings=Depends(get_settings),
+) -> None:
+    project, project_member = membership
+    require_project_active(project)
+    announcement = await get_announcement_for_project(db, project.id, announcement_id)
+    require_announcement_manager(project_member, announcement, user)
+
+    member_user_ids = await get_project_member_user_ids(db, project.id)
+    await create_user_notifications(
+        db,
+        member_user_ids,
+        project_id=project.id,
+        kind="announcement.reminder",
+        title=f"Reminder: {announcement.title}",
+        body=announcement.body,
+        target_path=f"/projects/{project.id}/announcements",
+        is_email_backed=True,
+    )
+    await db.commit()
+
+    recipients = await get_project_member_recipients(db, project.id)
+    background_tasks.add_task(
+        send_announcement_email,
+        settings,
+        recipients,
+        project.id,
+        project.name,
+        announcement.title,
+        announcement.body,
+        announcement.deadline_date,
+    )
+
+
 @router.websocket("/ws")
 async def announcement_updates(websocket: WebSocket, project_id: UUID) -> None:
     settings = get_settings()
