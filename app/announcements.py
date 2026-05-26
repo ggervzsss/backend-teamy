@@ -79,6 +79,11 @@ async def mark_announcement_read(db: AsyncSession, announcement_id: UUID, user_i
     return True, read_at
 
 
+async def mark_announcement_read_for_users(db: AsyncSession, announcement_id: UUID, user_ids: set[UUID]) -> None:
+    for user_id in user_ids:
+        await mark_announcement_read(db, announcement_id, user_id)
+
+
 async def get_project_member_user_ids(db: AsyncSession, project_id: UUID) -> set[UUID]:
     result = await db.execute(select(ProjectMember.user_id).where(ProjectMember.project_id == project_id))
     return set(result.scalars().all())
@@ -98,6 +103,7 @@ async def serialize_announcement(db: AsyncSession, announcement: Announcement, u
         body=announcement.body,
         is_pinned=announcement.is_pinned,
         deadline_date=announcement.deadline_date,
+        is_record_only=announcement.is_record_only,
         is_read=await has_read_announcement(db, announcement.id, user_id) if is_read is None else is_read,
         created_by=serialize_project_user(creator, creator_member),
         created_at=announcement.created_at,
@@ -154,8 +160,10 @@ async def create_announcement(
     db: AsyncSession = Depends(get_db),
     settings=Depends(get_settings),
 ) -> AnnouncementResponse:
-    project, _ = membership
+    project, project_member = membership
     require_project_active(project)
+    if payload.is_record_only and project_member.role != "leader":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only project leaders can create record-only announcements")
     title = payload.title.strip()
     body = payload.body.strip()
     if not title or not body:
@@ -165,39 +173,45 @@ async def create_announcement(
         project_id=project.id,
         title=title,
         body=body,
-        is_pinned=payload.is_pinned,
+        is_pinned=False if payload.is_record_only else payload.is_pinned,
         deadline_date=payload.deadline_date,
+        is_record_only=payload.is_record_only,
         created_by_user_id=user.id,
     )
     db.add(announcement)
     await db.flush()
-    await mark_announcement_read(db, announcement.id, user.id)
-    await create_user_notifications(
-        db,
-        await get_project_member_user_ids(db, project.id),
-        project_id=project.id,
-        kind="announcement.created",
-        title=f"New announcement: {announcement.title}",
-        body=announcement.body,
-        target_path=f"/projects/{project.id}/announcements",
-        is_email_backed=True,
-    )
+    member_user_ids = await get_project_member_user_ids(db, project.id)
+    if payload.is_record_only:
+        await mark_announcement_read_for_users(db, announcement.id, member_user_ids)
+    else:
+        await mark_announcement_read(db, announcement.id, user.id)
+        await create_user_notifications(
+            db,
+            member_user_ids,
+            project_id=project.id,
+            kind="announcement.created",
+            title=f"New announcement: {announcement.title}",
+            body=announcement.body,
+            target_path=f"/projects/{project.id}/announcements",
+            is_email_backed=True,
+        )
     await db.commit()
     await db.refresh(announcement)
 
     response = await serialize_announcement(db, announcement, user.id, is_read=True)
-    broadcast_announcement = await serialize_announcement(db, announcement, user.id, is_read=False)
-    recipients = await get_project_member_recipients(db, project.id)
-    background_tasks.add_task(
-        send_announcement_email,
-        settings,
-        recipients,
-        project.id,
-        project.name,
-        announcement.title,
-        announcement.body,
-        announcement.deadline_date,
-    )
+    broadcast_announcement = await serialize_announcement(db, announcement, user.id, is_read=True if announcement.is_record_only else False)
+    if not payload.is_record_only:
+        recipients = await get_project_member_recipients(db, project.id)
+        background_tasks.add_task(
+            send_announcement_email,
+            settings,
+            recipients,
+            project.id,
+            project.name,
+            announcement.title,
+            announcement.body,
+            announcement.deadline_date,
+        )
     await manager.broadcast(project.id, {"event": "announcement.created", "announcement": broadcast_announcement})
     return response
 
@@ -226,15 +240,24 @@ async def update_announcement(
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Body is required")
         announcement.body = body
     if payload.is_pinned is not None:
+        if announcement.is_record_only and payload.is_pinned:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Record-only announcements cannot be pinned")
         announcement.is_pinned = payload.is_pinned
     if "deadline_date" in payload.model_fields_set:
         announcement.deadline_date = payload.deadline_date
+    if payload.is_record_only is not None and payload.is_record_only != announcement.is_record_only:
+        if project_member.role != "leader":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only project leaders can update record-only state")
+        announcement.is_record_only = payload.is_record_only
+        if announcement.is_record_only:
+            announcement.is_pinned = False
+            await mark_announcement_read_for_users(db, announcement.id, await get_project_member_user_ids(db, project.id))
 
     await db.commit()
     await db.refresh(announcement)
 
     response = await serialize_announcement(db, announcement, user.id)
-    broadcast_announcement = await serialize_announcement(db, announcement, user.id, is_read=False)
+    broadcast_announcement = await serialize_announcement(db, announcement, user.id, is_read=True if announcement.is_record_only else False)
     await manager.broadcast(project.id, {"event": "announcement.updated", "announcement": broadcast_announcement})
     return response
 
@@ -300,6 +323,8 @@ async def update_announcement_pin(
     project, _ = membership
     require_project_active(project)
     announcement = await get_announcement_for_project(db, project.id, announcement_id)
+    if announcement.is_record_only and payload.is_pinned:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Record-only announcements cannot be pinned")
     announcement.is_pinned = payload.is_pinned
     await db.commit()
     await db.refresh(announcement)

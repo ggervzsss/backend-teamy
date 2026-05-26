@@ -58,6 +58,44 @@ async def test_project_members_can_create_and_list_announcements(client):
 
 
 @pytest.mark.asyncio
+async def test_leader_can_create_record_only_announcement_without_unread_state(client):
+    project, leader, member = await setup_project(client)
+
+    created = await client.post(
+        f"/projects/{project['id']}/announcements",
+        json={"title": "Old town hall", "body": "Recorded after the event.", "deadline_date": "2026-05-01", "is_pinned": True, "is_record_only": True},
+    )
+
+    assert created.status_code == 201
+    body = created.json()
+    assert body["created_by"]["id"] == str(leader.id)
+    assert body["is_record_only"] is True
+    assert body["is_pinned"] is False
+    assert body["is_read"] is True
+    await logout(client)
+
+    await login(client, member.email, member.full_name)
+    listed_for_member = await client.get(f"/projects/{project['id']}/announcements")
+    assert listed_for_member.status_code == 200
+    assert listed_for_member.json()["announcements"][0]["is_record_only"] is True
+    assert listed_for_member.json()["announcements"][0]["is_read"] is True
+
+
+@pytest.mark.asyncio
+async def test_member_cannot_create_record_only_announcement(client):
+    project, _, member = await setup_project(client)
+    await logout(client)
+    await login(client, member.email, member.full_name)
+
+    created = await client.post(
+        f"/projects/{project['id']}/announcements",
+        json={"title": "Old update", "body": "Backfilled note.", "is_record_only": True},
+    )
+
+    assert created.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_announcement_read_state_is_per_user(client):
     project, leader, member = await setup_project(client)
     created = await client.post(

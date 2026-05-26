@@ -167,6 +167,7 @@ class TaskResponse(ApiModel):
     start_date: date
     due_date: date | None = None
     status: TaskStatus
+    is_record_only: bool
     created_by: UserResponse
     reviewed_by: UserResponse | None = None
     reviewed_at: datetime | None = None
@@ -190,6 +191,7 @@ class AnnouncementCreateRequest(BaseModel):
     body: str = Field(min_length=1, max_length=4000)
     is_pinned: bool = False
     deadline_date: date | None = None
+    is_record_only: bool = False
 
 
 class AnnouncementUpdateRequest(BaseModel):
@@ -197,6 +199,7 @@ class AnnouncementUpdateRequest(BaseModel):
     body: str | None = Field(default=None, min_length=1, max_length=4000)
     is_pinned: bool | None = None
     deadline_date: date | None = None
+    is_record_only: bool | None = None
 
 
 class AnnouncementPinRequest(BaseModel):
@@ -231,6 +234,7 @@ class AnnouncementResponse(ApiModel):
     body: str
     is_pinned: bool
     deadline_date: date | None = None
+    is_record_only: bool
     is_read: bool
     created_by: UserResponse
     created_at: datetime
@@ -254,6 +258,7 @@ class TaskCreateRequest(BaseModel):
     due_date: date | None = None
     initial_status: Literal["todo", "in_progress"] = "todo"
     linked_file: TaskLinkedFileCreateRequest | None = None
+    is_record_only: bool = False
 
 
 class TaskUpdateRequest(BaseModel):
