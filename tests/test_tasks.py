@@ -103,6 +103,48 @@ async def test_project_members_can_create_tasks_but_cannot_review(client):
 
 
 @pytest.mark.asyncio
+async def test_leader_can_create_record_only_task_as_done(client):
+    project, leader, member_one, _ = await setup_project_with_members(client)
+
+    response = await client.post(
+        f"/projects/{project['id']}/tasks",
+        json={
+            "title": "Completed kickoff",
+            "description": "Recorded after the kickoff finished.",
+            "assignee_ids": [member_one["id"]],
+            "priority": "medium",
+            "start_date": "2026-05-01",
+            "due_date": "2026-05-02",
+            "initial_status": "todo",
+            "is_record_only": True,
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["status"] == "done"
+    assert body["is_record_only"] is True
+    assert body["reviewed_by"]["id"] == leader["id"]
+    assert body["reviewed_at"] is not None
+    assert body["assignees"][0]["status"] == "ready_for_review"
+    assert body["assignees"][0]["completed_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_member_cannot_create_record_only_task(client):
+    project, _, member_one, _ = await setup_project_with_members(client)
+    await logout(client)
+    await login(client, member_one["email"], member_one["full_name"])
+
+    response = await client.post(
+        f"/projects/{project['id']}/tasks",
+        json={"title": "Past task", "assignee_ids": [member_one["id"]], "is_record_only": True},
+    )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_member_readiness_requires_explicit_submit_for_review(client):
     project, leader, member_one, member_two = await setup_project_with_members(client)
     created = await client.post(

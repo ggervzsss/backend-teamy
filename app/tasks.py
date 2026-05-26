@@ -188,6 +188,7 @@ async def serialize_task(db: AsyncSession, task: Task) -> TaskResponse:
         start_date=task.start_date,
         due_date=task.due_date,
         status=task.status,
+        is_record_only=task.is_record_only,
         created_by=serialize_project_user(creator, creator_member),
         reviewed_by=serialize_project_user(reviewed_by, reviewed_by_member) if reviewed_by else None,
         reviewed_at=task.reviewed_at,
@@ -274,8 +275,10 @@ async def create_task(
     db: AsyncSession = Depends(get_db),
     settings=Depends(get_settings),
 ) -> TaskResponse:
-    project, _ = membership
+    project, project_member = membership
     require_project_active(project)
+    if payload.is_record_only:
+        require_leader(project_member)
 
     assignee_ids = list(dict.fromkeys(payload.assignee_ids))
     member_user_ids = await get_project_member_user_ids(db, project.id)
@@ -283,6 +286,7 @@ async def create_task(
     if invalid_assignees:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Every assignee must be a project member")
 
+    completed_at = datetime.now(UTC) if payload.is_record_only else None
     task = Task(
         project_id=project.id,
         title=payload.title.strip(),
@@ -290,14 +294,24 @@ async def create_task(
         priority=payload.priority,
         start_date=payload.start_date if payload.start_date else datetime.now(UTC).date(),
         due_date=payload.due_date,
-        status=payload.initial_status,
+        status="done" if payload.is_record_only else payload.initial_status,
+        is_record_only=payload.is_record_only,
         created_by_user_id=user.id,
+        reviewed_by_user_id=user.id if payload.is_record_only else None,
+        reviewed_at=completed_at,
     )
     db.add(task)
     await db.flush()
 
     for assignee_id in assignee_ids:
-        db.add(TaskAssignee(task_id=task.id, user_id=assignee_id, status=payload.initial_status))
+        db.add(
+            TaskAssignee(
+                task_id=task.id,
+                user_id=assignee_id,
+                status="ready_for_review" if payload.is_record_only else payload.initial_status,
+                completed_at=completed_at,
+            )
+        )
 
     if payload.linked_file is not None:
         resource = build_linked_file_resource(project.id, user.id, payload.title, payload.linked_file)
@@ -305,21 +319,23 @@ async def create_task(
         await db.flush()
         db.add(TaskFileLink(task_id=task.id, file_resource_id=resource.id))
 
-    await create_user_notifications(
-        db,
-        set(assignee_ids),
-        project_id=project.id,
-        kind="task.assigned",
-        title=f"New task assigned: {task.title}",
-        body=f"You have been assigned to {task.title} in {project.name}.",
-        target_path=f"/projects/{project.id}/task-board",
-        is_email_backed=True,
-    )
+    if not payload.is_record_only:
+        await create_user_notifications(
+            db,
+            set(assignee_ids),
+            project_id=project.id,
+            kind="task.assigned",
+            title=f"New task assigned: {task.title}",
+            body=f"You have been assigned to {task.title} in {project.name}.",
+            target_path=f"/projects/{project.id}/task-board",
+            is_email_backed=True,
+        )
     await db.commit()
     await db.refresh(task)
     response = await serialize_task(db, task)
-    recipients = await get_user_recipients(db, set(assignee_ids))
-    background_tasks.add_task(send_task_assignment_email, settings, recipients, project.id, project.name, task.title, task.due_date)
+    if not payload.is_record_only:
+        recipients = await get_user_recipients(db, set(assignee_ids))
+        background_tasks.add_task(send_task_assignment_email, settings, recipients, project.id, project.name, task.title, task.due_date)
     await manager.broadcast(project.id, "task.created", response)
     return response
 
