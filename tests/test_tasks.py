@@ -50,7 +50,6 @@ async def test_leader_can_create_task_assigned_to_multiple_members(client):
             "title": "Write report",
             "description": "Draft the final report",
             "assignee_ids": [member_one["id"], member_two["id"]],
-            "priority": "high",
             "due_date": "2026-05-20",
             "initial_status": "todo",
         },
@@ -60,7 +59,6 @@ async def test_leader_can_create_task_assigned_to_multiple_members(client):
     body = response.json()
     assert body["title"] == "Write report"
     assert body["status"] == "todo"
-    assert body["priority"] == "high"
     assert body["due_date"] == "2026-05-20"
     assert {assignee["user"]["id"] for assignee in body["assignees"]} == {member_one["id"], member_two["id"]}
 
@@ -112,7 +110,6 @@ async def test_leader_can_create_record_only_task_as_done(client):
             "title": "Completed kickoff",
             "description": "Recorded after the kickoff finished.",
             "assignee_ids": [member_one["id"]],
-            "priority": "medium",
             "start_date": "2026-05-01",
             "due_date": "2026-05-02",
             "initial_status": "todo",
@@ -238,17 +235,16 @@ async def test_creator_or_leader_can_edit_task_details(client):
     await login(client, member_one["email"], member_one["full_name"])
     created = await client.post(
         f"/projects/{project['id']}/tasks",
-        json={"title": "Draft outline", "assignee_ids": [member_one["id"]], "priority": "low"},
+        json={"title": "Draft outline", "assignee_ids": [member_one["id"]]},
     )
     task_id = created.json()["id"]
 
     creator_update = await client.patch(
         f"/projects/{project['id']}/tasks/{task_id}",
-        json={"title": "Draft outline v2", "priority": "high", "assignee_ids": [member_one["id"], member_two["id"]]},
+        json={"title": "Draft outline v2", "assignee_ids": [member_one["id"], member_two["id"]]},
     )
     assert creator_update.status_code == 200
     assert creator_update.json()["title"] == "Draft outline v2"
-    assert creator_update.json()["priority"] == "high"
     assert {assignee["user"]["id"] for assignee in creator_update.json()["assignees"]} == {member_one["id"], member_two["id"]}
     await logout(client)
 
@@ -278,3 +274,4 @@ async def test_assigned_member_can_link_external_resource_to_task(client):
     body = linked.json()
     assert body["linked_files"][0]["title"] == "Design brief"
     assert body["linked_files"][0]["url"] == "https://example.com/brief"
+

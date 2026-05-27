@@ -184,7 +184,6 @@ async def serialize_task(db: AsyncSession, task: Task) -> TaskResponse:
         project_id=task.project_id,
         title=task.title,
         description=task.description,
-        priority=task.priority,
         start_date=task.start_date,
         due_date=task.due_date,
         status=task.status,
@@ -291,7 +290,6 @@ async def create_task(
         project_id=project.id,
         title=payload.title.strip(),
         description=payload.description.strip() if payload.description else None,
-        priority=payload.priority,
         start_date=payload.start_date if payload.start_date else datetime.now(UTC).date(),
         due_date=payload.due_date,
         status="done" if payload.is_record_only else payload.initial_status,
@@ -340,7 +338,7 @@ async def create_task(
     return response
 
 
-@router.patch("/tasks/{task_id}", response_model=TaskResponse)
+@router.patch("/{task_id}", response_model=TaskResponse)
 async def update_task(
     task_id: UUID,
     payload: TaskUpdateRequest,
@@ -361,8 +359,6 @@ async def update_task(
         task.title = payload.title.strip()
     if "description" in payload.model_fields_set:
         task.description = payload.description.strip() if payload.description else None
-    if payload.priority is not None:
-        task.priority = payload.priority
     if "start_date" in payload.model_fields_set:
         task.start_date = payload.start_date if payload.start_date else datetime.now(UTC).date()
     if "due_date" in payload.model_fields_set:
@@ -686,3 +682,5 @@ async def task_updates(websocket: WebSocket, project_id: UUID) -> None:
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(project_id, websocket)
+
+

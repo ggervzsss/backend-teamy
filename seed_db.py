@@ -224,7 +224,6 @@ async def seed():
             {
                 "title": "Define visual brand guidelines",
                 "description": "Establish the color palette, typography hierarchy, and spacing rules for the landing page.",
-                "priority": "high",
                 "start_date": today - timedelta(days=20),
                 "due_date": today - timedelta(days=15),
                 "status": "done",
@@ -235,7 +234,6 @@ async def seed():
             {
                 "title": "Draft website copywriting",
                 "description": "Write initial draft copy for hero section, features list, and call-to-actions.",
-                "priority": "medium",
                 "start_date": today - timedelta(days=15),
                 "due_date": today - timedelta(days=10),
                 "status": "done",
@@ -246,7 +244,6 @@ async def seed():
             {
                 "title": "Develop landing page layout",
                 "description": "Translate Figma designs into responsive React components using Geist font styling.",
-                "priority": "high",
                 "start_date": today - timedelta(days=5),
                 "due_date": today + timedelta(days=4),
                 "status": "in_progress",
@@ -256,7 +253,6 @@ async def seed():
             {
                 "title": "Setup continuous integration & staging environment",
                 "description": "Configure GitHub Actions and connect AWS Amplify / Vercel for preview deployments.",
-                "priority": "high",
                 "start_date": today - timedelta(days=3),
                 "due_date": today + timedelta(days=2),
                 "status": "in_progress",
@@ -266,7 +262,6 @@ async def seed():
             {
                 "title": "Create SVG illustrations for hero section",
                 "description": "Custom tech-themed vector graphics demonstrating interactive workflows.",
-                "priority": "low",
                 "start_date": today,
                 "due_date": today + timedelta(days=6),
                 "status": "todo",
@@ -277,7 +272,6 @@ async def seed():
             {
                 "title": "Review responsiveness on tablet & mobile devices",
                 "description": "Inspect layout breakpoints at 768px and 375px. Resolve overlapping text columns.",
-                "priority": "medium",
                 "start_date": today - timedelta(days=2),
                 "due_date": today + timedelta(days=1),
                 "status": "for_review",
@@ -287,7 +281,6 @@ async def seed():
             {
                 "title": "Resolve critical dependency security scanner alerts",
                 "description": "Run npm audit/pip audit. Update packages exhibiting vulnerability exploits.",
-                "priority": "high",
                 "start_date": today - timedelta(days=12),
                 "due_date": today - timedelta(days=4),
                 "status": "todo",
@@ -297,7 +290,6 @@ async def seed():
             {
                 "title": "Publish beta website to staging router",
                 "description": "Deploy to staging, run sanity checks, and distribute URL to testers.",
-                "priority": "medium",
                 "start_date": today + timedelta(days=8),
                 "due_date": today + timedelta(days=12),
                 "status": "todo",
@@ -317,7 +309,6 @@ async def seed():
                     project_id=apollo_project.id,
                     title=t_data["title"],
                     description=t_data["description"],
-                    priority=t_data["priority"],
                     start_date=t_data["start_date"],
                     due_date=t_data["due_date"],
                     status=t_data["status"],
@@ -359,7 +350,6 @@ async def seed():
             {
                 "title": "Conduct user interviews on old layout",
                 "description": "Gather feedback from 5 active customers regarding dashboard confusion and task navigation pain points.",
-                "priority": "high",
                 "start_date": today - timedelta(days=25),
                 "due_date": today - timedelta(days=18),
                 "status": "done",
@@ -369,7 +359,6 @@ async def seed():
             {
                 "title": "Create Figma high-fidelity prototypes",
                 "description": "Build high-fidelity wireframes including the interactive timeline view and navigation switcher.",
-                "priority": "high",
                 "start_date": today - timedelta(days=8),
                 "due_date": today - timedelta(days=2),
                 "status": "in_progress",
@@ -380,7 +369,6 @@ async def seed():
             {
                 "title": "Optimize list rendering performance",
                 "description": "Audit layout recalculations and implement row-virtualization for long feeds.",
-                "priority": "high",
                 "start_date": today,
                 "due_date": today + timedelta(days=10),
                 "status": "todo",
@@ -390,7 +378,6 @@ async def seed():
             {
                 "title": "Implement biometric login (Face ID / Touch ID)",
                 "description": "Configure Keychain integration on iOS and Keystore on Android to securely cache OAuth tokens.",
-                "priority": "medium",
                 "start_date": today + timedelta(days=4),
                 "due_date": today + timedelta(days=14),
                 "status": "todo",
@@ -400,7 +387,6 @@ async def seed():
             {
                 "title": "QA regression testing & bugs log",
                 "description": "Execute test cases on staging. Open tickets for layout deviations or script crashes.",
-                "priority": "medium",
                 "start_date": today + timedelta(days=15),
                 "due_date": today + timedelta(days=20),
                 "status": "todo",
@@ -420,7 +406,6 @@ async def seed():
                     project_id=mobile_project.id,
                     title=t_data["title"],
                     description=t_data["description"],
-                    priority=t_data["priority"],
                     start_date=t_data["start_date"],
                     due_date=t_data["due_date"],
                     status=t_data["status"],
@@ -561,3 +546,4 @@ async def seed():
 
 if __name__ == "__main__":
     asyncio.run(seed())
+
