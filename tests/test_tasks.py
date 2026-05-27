@@ -142,6 +142,72 @@ async def test_member_cannot_create_record_only_task(client):
 
 
 @pytest.mark.asyncio
+async def test_private_tasks_are_only_visible_in_my_tasks(client):
+    project, leader, member_one, member_two = await setup_project_with_members(client)
+    await logout(client)
+    await login(client, member_one["email"], member_one["full_name"])
+
+    private_response = await client.post(
+        f"/projects/{project['id']}/tasks",
+        json={
+            "title": "Personal follow-up",
+            "description": "Keep this note private.",
+            "assignee_ids": [member_one["id"]],
+            "is_private": True,
+            "personal_kind": "note",
+        },
+    )
+
+    assert private_response.status_code == 201
+    private_task = private_response.json()
+    assert private_task["is_private"] is True
+    assert private_task["personal_kind"] == "note"
+
+    board_for_owner = await client.get(f"/projects/{project['id']}/tasks")
+    assert all(task["id"] != private_task["id"] for task in board_for_owner.json()["tasks"])
+
+    my_tasks = await client.get(f"/projects/{project['id']}/tasks/me")
+    assert {task["id"] for task in my_tasks.json()["tasks"]} == {private_task["id"]}
+
+    completed = await client.patch(f"/projects/{project['id']}/tasks/{private_task['id']}/assignees/me", json={"status": "done"})
+    assert completed.status_code == 200
+    assert completed.json()["status"] == "done"
+    assert completed.json()["assignees"][0]["completed_at"] is not None
+
+    await logout(client)
+    await login(client, member_two["email"], member_two["full_name"])
+    member_two_tasks = await client.get(f"/projects/{project['id']}/tasks/me")
+    assert all(task["id"] != private_task["id"] for task in member_two_tasks.json()["tasks"])
+    member_two_update = await client.patch(f"/projects/{project['id']}/tasks/{private_task['id']}/assignees/me", json={"status": "in_progress"})
+    assert member_two_update.status_code == 404
+
+    await logout(client)
+    await login(client, leader["email"], leader["full_name"])
+    leader_update = await client.patch(f"/projects/{project['id']}/tasks/{private_task['id']}", json={"title": "Leader should not see this"})
+    assert leader_update.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_my_tasks_includes_shared_assigned_tasks(client):
+    project, _, member_one, member_two = await setup_project_with_members(client)
+    created = await client.post(
+        f"/projects/{project['id']}/tasks",
+        json={"title": "Shared assignment", "assignee_ids": [member_one["id"]]},
+    )
+    task_id = created.json()["id"]
+    await logout(client)
+
+    await login(client, member_one["email"], member_one["full_name"])
+    member_one_tasks = await client.get(f"/projects/{project['id']}/tasks/me")
+    assert {task["id"] for task in member_one_tasks.json()["tasks"]} == {task_id}
+
+    await logout(client)
+    await login(client, member_two["email"], member_two["full_name"])
+    member_two_tasks = await client.get(f"/projects/{project['id']}/tasks/me")
+    assert all(task["id"] != task_id for task in member_two_tasks.json()["tasks"])
+
+
+@pytest.mark.asyncio
 async def test_member_readiness_requires_explicit_submit_for_review(client):
     project, leader, member_one, member_two = await setup_project_with_members(client)
     created = await client.post(

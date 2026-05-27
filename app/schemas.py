@@ -132,6 +132,7 @@ class ProjectListResponse(ApiModel):
 
 TaskStatus = Literal["todo", "in_progress", "for_review", "done"]
 AssigneeStatus = Literal["todo", "in_progress", "ready_for_review"]
+PersonalTaskKind = Literal["task", "ticket", "note"]
 FileResourceKind = Literal["doc", "link"]
 
 
@@ -229,6 +230,8 @@ class TaskResponse(ApiModel):
     due_date: date | None = None
     status: TaskStatus
     is_record_only: bool
+    is_private: bool
+    personal_kind: PersonalTaskKind
     created_by: UserResponse
     reviewed_by: UserResponse | None = None
     reviewed_at: datetime | None = None
@@ -319,6 +322,8 @@ class TaskCreateRequest(BaseModel):
     initial_status: Literal["todo", "in_progress"] = "todo"
     linked_file: TaskLinkedFileCreateRequest | None = None
     is_record_only: bool = False
+    is_private: bool = False
+    personal_kind: PersonalTaskKind = "task"
 
 
 class TaskUpdateRequest(BaseModel):
@@ -330,7 +335,7 @@ class TaskUpdateRequest(BaseModel):
 
 
 class TaskAssigneeUpdateRequest(BaseModel):
-    status: Literal["in_progress", "ready_for_review"]
+    status: Literal["todo", "in_progress", "ready_for_review", "done"]
 
 
 class TaskReviewRequest(BaseModel):

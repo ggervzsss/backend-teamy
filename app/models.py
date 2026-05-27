@@ -121,6 +121,8 @@ class Task(Base):
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="todo", index=True)
     is_record_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    is_private: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    personal_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="task", index=True)
     created_by_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     reviewed_by_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
