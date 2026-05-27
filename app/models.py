@@ -122,6 +122,7 @@ class Task(Base):
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="todo", index=True)
     is_record_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     created_by_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    reviewed_by_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     review_remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
