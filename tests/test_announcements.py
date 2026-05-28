@@ -1,3 +1,5 @@
+from datetime import date, timedelta
+
 import pytest
 
 
@@ -38,17 +40,18 @@ async def test_project_members_can_create_and_list_announcements(client):
     project, _, member = await setup_project(client)
     await logout(client)
     await login(client, member.email, member.full_name)
+    deadline_date = (date.today() + timedelta(days=7)).isoformat()
 
     created = await client.post(
         f"/projects/{project['id']}/announcements",
-        json={"title": "Sprint demo", "body": "Demo starts at 3 PM.", "is_pinned": True, "deadline_date": "2026-05-20"},
+        json={"title": "Sprint demo", "body": "Demo starts at 3 PM.", "is_pinned": True, "deadline_date": deadline_date},
     )
 
     assert created.status_code == 201
     body = created.json()
     assert body["title"] == "Sprint demo"
     assert body["is_pinned"] is True
-    assert body["deadline_date"] == "2026-05-20"
+    assert body["deadline_date"] == deadline_date
     assert body["is_read"] is True
     assert body["created_by"]["id"] == str(member.id)
 
@@ -145,8 +148,79 @@ async def test_project_members_can_pin_and_unpin_announcements(client):
 
 
 @pytest.mark.asyncio
+async def test_future_dated_announcements_are_auto_pinned(client):
+    project, _, member = await setup_project(client)
+    await logout(client)
+    await login(client, member.email, member.full_name)
+    deadline_date = (date.today() + timedelta(days=3)).isoformat()
+
+    created = await client.post(
+        f"/projects/{project['id']}/announcements",
+        json={"title": "Planning meeting", "body": "Meet next week.", "deadline_date": deadline_date},
+    )
+
+    assert created.status_code == 201
+    assert created.json()["is_pinned"] is True
+
+
+@pytest.mark.asyncio
+async def test_past_dated_announcements_are_not_pinned(client):
+    project, _, member = await setup_project(client)
+    await logout(client)
+    await login(client, member.email, member.full_name)
+    deadline_date = (date.today() - timedelta(days=1)).isoformat()
+
+    created = await client.post(
+        f"/projects/{project['id']}/announcements",
+        json={"title": "Past meeting", "body": "Already happened.", "is_pinned": True, "deadline_date": deadline_date},
+    )
+
+    assert created.status_code == 201
+    assert created.json()["is_pinned"] is False
+
+    pinned = await client.patch(f"/projects/{project['id']}/announcements/{created.json()['id']}/pin", json={"is_pinned": True})
+    assert pinned.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_undated_announcement_can_be_marked_deadline_done(client):
+    project, _, member = await setup_project(client)
+    await logout(client)
+    await login(client, member.email, member.full_name)
+
+    created = await client.post(
+        f"/projects/{project['id']}/announcements",
+        json={"title": "Standing reminder", "body": "Keep the workspace updated."},
+    )
+    announcement_id = created.json()["id"]
+
+    marked = await client.patch(f"/projects/{project['id']}/announcements/{announcement_id}/deadline-done")
+
+    assert marked.status_code == 200
+    assert marked.json()["deadline_done_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_dated_announcement_cannot_be_marked_deadline_done(client):
+    project, _, member = await setup_project(client)
+    await logout(client)
+    await login(client, member.email, member.full_name)
+    deadline_date = (date.today() + timedelta(days=3)).isoformat()
+
+    created = await client.post(
+        f"/projects/{project['id']}/announcements",
+        json={"title": "Kickoff", "body": "Join the call.", "deadline_date": deadline_date},
+    )
+
+    marked = await client.patch(f"/projects/{project['id']}/announcements/{created.json()['id']}/deadline-done")
+
+    assert marked.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_creator_or_leader_can_edit_announcement(client):
     project, leader, member = await setup_project(client)
+    deadline_date = (date.today() + timedelta(days=7)).isoformat()
     await logout(client)
     await login(client, member.email, member.full_name)
     created = await client.post(
@@ -157,12 +231,12 @@ async def test_creator_or_leader_can_edit_announcement(client):
 
     creator_update = await client.patch(
         f"/projects/{project['id']}/announcements/{announcement_id}",
-        json={"title": "Updated note", "body": "Published note.", "is_pinned": True, "deadline_date": "2026-05-21"},
+        json={"title": "Updated note", "body": "Published note.", "is_pinned": True, "deadline_date": deadline_date},
     )
     assert creator_update.status_code == 200
     assert creator_update.json()["title"] == "Updated note"
     assert creator_update.json()["is_pinned"] is True
-    assert creator_update.json()["deadline_date"] == "2026-05-21"
+    assert creator_update.json()["deadline_date"] == deadline_date
     await logout(client)
 
     await login(client, leader.email, leader.full_name)

@@ -298,6 +298,7 @@ class AnnouncementResponse(ApiModel):
     body: str
     is_pinned: bool
     deadline_date: date | None = None
+    deadline_done_at: datetime | None = None
     is_record_only: bool
     is_read: bool
     created_by: UserResponse

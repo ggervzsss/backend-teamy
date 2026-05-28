@@ -1,5 +1,5 @@
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -89,6 +89,33 @@ async def get_project_member_user_ids(db: AsyncSession, project_id: UUID) -> set
     return set(result.scalars().all())
 
 
+def has_announcement_date_passed(announcement: Announcement) -> bool:
+    return announcement.deadline_date is not None and announcement.deadline_date < date.today()
+
+
+def has_date_value_passed(value: date | None) -> bool:
+    return value is not None and value < date.today()
+
+
+def should_auto_pin_announcement(deadline_date: date | None) -> bool:
+    return deadline_date is not None and deadline_date > date.today()
+
+
+def get_initial_pin_state(payload: AnnouncementCreateRequest) -> bool:
+    if payload.is_record_only or has_date_value_passed(payload.deadline_date):
+        return False
+    if should_auto_pin_announcement(payload.deadline_date):
+        return True
+    return payload.is_pinned
+
+
+def sync_automatic_announcement_state(announcement: Announcement) -> bool:
+    if has_announcement_date_passed(announcement) and announcement.is_pinned:
+        announcement.is_pinned = False
+        return True
+    return False
+
+
 async def serialize_announcement(db: AsyncSession, announcement: Announcement, user_id: UUID, is_read: bool | None = None) -> AnnouncementResponse:
     creator = await db.get(User, announcement.created_by_user_id)
     if creator is None:
@@ -103,6 +130,7 @@ async def serialize_announcement(db: AsyncSession, announcement: Announcement, u
         body=announcement.body,
         is_pinned=announcement.is_pinned,
         deadline_date=announcement.deadline_date,
+        deadline_done_at=announcement.deadline_done_at,
         is_record_only=announcement.is_record_only,
         is_read=await has_read_announcement(db, announcement.id, user_id) if is_read is None else is_read,
         created_by=serialize_project_user(creator, creator_member),
@@ -136,8 +164,14 @@ async def list_announcements(
         .where(Announcement.project_id == project.id)
         .order_by(Announcement.is_pinned.desc(), Announcement.created_at.desc(), Announcement.updated_at.desc())
     )
+    announcements = result.scalars().all()
+    did_sync_state = False
+    for announcement in announcements:
+        did_sync_state = sync_automatic_announcement_state(announcement) or did_sync_state
+    if did_sync_state:
+        await db.commit()
     return AnnouncementListResponse(
-        announcements=[await serialize_announcement(db, announcement, user.id) for announcement in result.scalars().all()]
+        announcements=[await serialize_announcement(db, announcement, user.id) for announcement in announcements]
     )
 
 
@@ -173,7 +207,7 @@ async def create_announcement(
         project_id=project.id,
         title=title,
         body=body,
-        is_pinned=False if payload.is_record_only else payload.is_pinned,
+        is_pinned=get_initial_pin_state(payload),
         deadline_date=payload.deadline_date,
         is_record_only=payload.is_record_only,
         created_by_user_id=user.id,
@@ -227,6 +261,7 @@ async def update_announcement(
     project, project_member = membership
     require_project_active(project)
     announcement = await get_announcement_for_project(db, project.id, announcement_id)
+    sync_automatic_announcement_state(announcement)
     require_announcement_manager(project_member, announcement, user)
 
     if payload.title is not None:
@@ -245,6 +280,7 @@ async def update_announcement(
         announcement.is_pinned = payload.is_pinned
     if "deadline_date" in payload.model_fields_set:
         announcement.deadline_date = payload.deadline_date
+        announcement.deadline_done_at = None
     if payload.is_record_only is not None and payload.is_record_only != announcement.is_record_only:
         if project_member.role != "leader":
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only project leaders can update record-only state")
@@ -252,6 +288,7 @@ async def update_announcement(
         if announcement.is_record_only:
             announcement.is_pinned = False
             await mark_announcement_read_for_users(db, announcement.id, await get_project_member_user_ids(db, project.id))
+    sync_automatic_announcement_state(announcement)
 
     await db.commit()
     await db.refresh(announcement)
@@ -272,6 +309,7 @@ async def get_announcement(
     project, _ = membership
     require_project_active(project)
     announcement = await get_announcement_for_project(db, project.id, announcement_id)
+    sync_automatic_announcement_state(announcement)
     was_created, read_at = await mark_announcement_read(db, announcement.id, user.id)
     await db.commit()
     if was_created:
@@ -297,6 +335,7 @@ async def mark_announcement_as_read(
     project, _ = membership
     require_project_active(project)
     announcement = await get_announcement_for_project(db, project.id, announcement_id)
+    sync_automatic_announcement_state(announcement)
     was_created, read_at = await mark_announcement_read(db, announcement.id, user.id)
     await db.commit()
     if was_created:
@@ -323,9 +362,34 @@ async def update_announcement_pin(
     project, _ = membership
     require_project_active(project)
     announcement = await get_announcement_for_project(db, project.id, announcement_id)
+    sync_automatic_announcement_state(announcement)
     if announcement.is_record_only and payload.is_pinned:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Record-only announcements cannot be pinned")
+    if has_announcement_date_passed(announcement) and payload.is_pinned:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Past dated announcements cannot be pinned")
     announcement.is_pinned = payload.is_pinned
+    await db.commit()
+    await db.refresh(announcement)
+
+    response = await serialize_announcement(db, announcement, user.id)
+    broadcast_announcement = await serialize_announcement(db, announcement, user.id, is_read=False)
+    await manager.broadcast(project.id, {"event": "announcement.updated", "announcement": broadcast_announcement})
+    return response
+
+
+@router.patch("/{announcement_id}/deadline-done", response_model=AnnouncementResponse)
+async def mark_announcement_deadline_done(
+    announcement_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
+    db: AsyncSession = Depends(get_db),
+) -> AnnouncementResponse:
+    project, _ = membership
+    require_project_active(project)
+    announcement = await get_announcement_for_project(db, project.id, announcement_id)
+    if announcement.deadline_date is not None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only announcements without a date can be marked done")
+    announcement.deadline_done_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(announcement)
 
