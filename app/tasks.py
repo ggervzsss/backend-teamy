@@ -1,4 +1,4 @@
-from collections import defaultdict
+﻿from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
@@ -96,12 +96,6 @@ async def user_is_task_assignee(db: AsyncSession, task_id: UUID, user_id: UUID) 
 def require_private_task_owner(task: Task, user: User) -> None:
     if task.is_private and task.created_by_user_id != user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
-
-
-async def all_task_assignees_ready(db: AsyncSession, task_id: UUID) -> bool:
-    result = await db.execute(select(TaskAssignee.status).where(TaskAssignee.task_id == task_id))
-    assignee_statuses = list(result.scalars().all())
-    return bool(assignee_statuses) and all(assignee_status == "ready_for_review" for assignee_status in assignee_statuses)
 
 
 def require_task_manager(project_member: ProjectMember, task: Task, user: User) -> None:
@@ -514,6 +508,16 @@ async def link_existing_task_file(
         await db.commit()
         await db.refresh(task)
 
+    resource = resource_result.scalar_one_or_none()
+    if resource is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File resource not found")
+
+    existing_link_result = await db.execute(select(TaskFileLink).where(TaskFileLink.task_id == task.id, TaskFileLink.file_resource_id == resource.id))
+    if existing_link_result.scalar_one_or_none() is None:
+        db.add(TaskFileLink(task_id=task.id, file_resource_id=resource.id))
+        await db.commit()
+        await db.refresh(task)
+
     response = await serialize_task(db, task)
     await manager.broadcast(project.id, "task.updated", response)
     return response
@@ -523,11 +527,9 @@ async def link_existing_task_file(
 async def update_my_task_status(
     task_id: UUID,
     payload: TaskAssigneeUpdateRequest,
-    background_tasks: BackgroundTasks,
     user: Annotated[User, Depends(get_current_user)],
     membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
     db: AsyncSession = Depends(get_db),
-    settings=Depends(get_settings),
 ) -> TaskResponse:
     project, _ = membership
     require_project_active(project)
@@ -555,34 +557,12 @@ async def update_my_task_status(
     if task.status == "for_review":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tasks in review cannot be updated until changes are requested")
 
-    was_ready_for_review = await all_task_assignees_ready(db, task.id)
     assignee.status = payload.status
     assignee.completed_at = datetime.now(UTC) if payload.status == "ready_for_review" else None
     await move_task_after_assignee_update(db, task)
-    is_ready_notification_needed = False
-    leader_user_ids: set[UUID] = set()
-    if not was_ready_for_review:
-        assignee_result_for_notification = await db.execute(select(TaskAssignee).where(TaskAssignee.task_id == task.id))
-        is_ready_notification_needed = all(task_assignee.status == "ready_for_review" for task_assignee in assignee_result_for_notification.scalars().all())
-        if is_ready_notification_needed:
-            leader_user_ids = await get_project_leader_user_ids(db, project.id)
-            await create_user_notifications(
-                db,
-                leader_user_ids,
-                project_id=project.id,
-                kind="task.ready_for_review",
-                title=f"Task ready for review: {task.title}",
-                body=f"All assignees have marked {task.title} as ready for review in {project.name}.",
-                target_path=f"/projects/{project.id}/task-board",
-                is_email_backed=True,
-            )
     await db.commit()
     await db.refresh(task)
     response = await serialize_task(db, task)
-    is_ready_for_review = all(task_assignee.status == "ready_for_review" for task_assignee in response.assignees)
-    if is_ready_notification_needed and is_ready_for_review:
-        recipients = await get_project_leader_recipients(db, project.id)
-        background_tasks.add_task(send_task_ready_for_review_email, settings, recipients, project.id, project.name, task.title)
     await manager.broadcast(project.id, "task.updated", response)
     return response
 
@@ -590,9 +570,11 @@ async def update_my_task_status(
 @router.post("/tasks/{task_id}/submit-review", response_model=TaskResponse)
 async def submit_task_for_review(
     task_id: UUID,
+    background_tasks: BackgroundTasks,
     user: Annotated[User, Depends(get_current_user)],
     membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
     db: AsyncSession = Depends(get_db),
+    settings=Depends(get_settings),
 ) -> TaskResponse:
     project, _ = membership
     require_project_active(project)
@@ -618,6 +600,21 @@ async def submit_task_for_review(
     await db.commit()
     await db.refresh(task)
     response = await serialize_task(db, task)
+    # Notify project leaders that the task has been submitted for review.
+    leader_user_ids = await get_project_leader_user_ids(db, project.id)
+    await create_user_notifications(
+        db,
+        leader_user_ids,
+        project_id=project.id,
+        kind="task.ready_for_review",
+        title=f"Task submitted for review: {task.title}",
+        body=f"{task.title} in {project.name} has been submitted for review.",
+        target_path=f"/projects/{project.id}/task-board",
+        is_email_backed=True,
+    )
+    await db.commit()
+    recipients = await get_project_leader_recipients(db, project.id)
+    background_tasks.add_task(send_task_ready_for_review_email, settings, recipients, project.id, project.name, task.title)
     await manager.broadcast(project.id, "task.submitted", response)
     return response
 
