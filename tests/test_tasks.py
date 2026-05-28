@@ -321,6 +321,41 @@ async def test_creator_or_leader_can_edit_task_details(client):
 
 
 @pytest.mark.asyncio
+async def test_creator_or_leader_can_edit_done_task_details(client):
+    project, leader, member_one, member_two = await setup_project_with_members(client)
+    created = await client.post(
+        f"/projects/{project['id']}/tasks",
+        json={"title": "Final report", "assignee_ids": [member_one["id"]], "initial_status": "in_progress"},
+    )
+    task_id = created.json()["id"]
+    await logout(client)
+
+    await login(client, member_one["email"], member_one["full_name"])
+    ready = await client.patch(f"/projects/{project['id']}/tasks/{task_id}/assignees/me", json={"status": "ready_for_review"})
+    assert ready.status_code == 200
+    submit = await client.post(f"/projects/{project['id']}/tasks/{task_id}/submit-review")
+    assert submit.status_code == 200
+    await logout(client)
+
+    await login(client, leader["email"], leader["full_name"])
+    approved = await client.post(f"/projects/{project['id']}/tasks/{task_id}/review", json={"action": "approve"})
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "done"
+
+    updated = await client.patch(
+        f"/projects/{project['id']}/tasks/{task_id}",
+        json={"title": "Final report archived", "description": "Clean copy.", "assignee_ids": [member_one["id"], member_two["id"]]},
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["title"] == "Final report archived"
+    assert updated.json()["status"] == "done"
+    assert {assignee["user"]["id"] for assignee in updated.json()["assignees"]} == {member_one["id"], member_two["id"]}
+    assert all(assignee["status"] == "ready_for_review" for assignee in updated.json()["assignees"])
+    assert all(assignee["completed_at"] is not None for assignee in updated.json()["assignees"])
+
+
+@pytest.mark.asyncio
 async def test_assigned_member_can_link_external_resource_to_task(client):
     project, _, member_one, _ = await setup_project_with_members(client)
     created = await client.post(

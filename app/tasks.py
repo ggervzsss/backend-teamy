@@ -383,8 +383,6 @@ async def update_task(
     task = await get_task_for_project(db, project.id, task_id)
     require_private_task_owner(task, user)
     require_task_manager(project_member, task, user)
-    if task.status == "done":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Done tasks cannot be edited")
     if task.is_private and payload.assignee_ids is not None and set(payload.assignee_ids) != {user.id}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Private items can only be assigned to you")
 
@@ -421,11 +419,13 @@ async def update_task(
 
         for assignee_id in assignee_ids:
             if assignee_id not in current_assignees:
+                completed_at = datetime.now(UTC) if task.status == "done" else None
                 db.add(
                     TaskAssignee(
                         task_id=task.id,
                         user_id=assignee_id,
-                        status="todo" if task.status == "todo" else "in_progress",
+                        status="ready_for_review" if task.status == "done" else "todo" if task.status == "todo" else "in_progress",
+                        completed_at=completed_at,
                     )
                 )
 
