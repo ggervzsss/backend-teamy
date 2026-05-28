@@ -358,9 +358,9 @@ async def send_task_ready_for_review_email(
     task_title: str,
 ) -> None:
     task_url = get_frontend_url(settings, project_id, "/task-board")
-    body = f"<p>All assignees have marked <strong>{html.escape(task_title)}</strong> as ready for review in {html.escape(project_name)}.</p>"
-    text = f"All assignees have marked {task_title} as ready for review in {project_name}. Open: {task_url}"
-    await send_email(settings, recipients, f"Task ready for review: {task_title}", build_email_shell("Task ready for review", body, task_url), text)
+    body = f"<p><strong>{html.escape(task_title)}</strong> in {html.escape(project_name)} has been submitted for review and is awaiting your approval.</p>"
+    text = f"{task_title} in {project_name} has been submitted for review and is awaiting your approval. Open: {task_url}"
+    await send_email(settings, recipients, f"Task submitted for review: {task_title}", build_email_shell("Task submitted for review", body, task_url, "Review on Task Board"), text)
 
 
 async def send_task_changes_requested_email(

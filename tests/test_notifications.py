@@ -33,7 +33,7 @@ async def test_user_can_list_and_read_email_backed_notifications(client):
     await login(client, leader.email, leader.full_name)
     task = await client.post(
         f"/projects/{project['id']}/tasks",
-        json={"title": "Read the brief", "assignee_ids": [str(member.id)], "priority": "medium", "initial_status": "todo"},
+        json={"title": "Read the brief", "assignee_ids": [str(member.id)], "initial_status": "todo"},
     )
     assert task.status_code == 201
     await logout(client)
@@ -54,3 +54,4 @@ async def test_user_can_list_and_read_email_backed_notifications(client):
     relisted = await client.get("/notifications")
     assert relisted.status_code == 200
     assert relisted.json()["unread_count"] == 0
+

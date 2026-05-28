@@ -61,6 +61,69 @@ class ProjectResponse(ApiModel):
     archived_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+from datetime import date, datetime
+from typing import Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+from app.time_utils import utc_isoformat
+
+
+class ApiModel(BaseModel):
+    model_config = ConfigDict(from_attributes=True, json_encoders={datetime: utc_isoformat})
+
+
+class UserProfileUpdateRequest(BaseModel):
+    full_name: str | None = Field(default=None, min_length=1, max_length=160)
+
+
+class UserResponse(ApiModel):
+
+    id: UUID
+    email: EmailStr
+    full_name: str
+    username: str | None = None
+    avatar_url: str | None = None
+    google_avatar_url: str | None = None
+    last_online_at: datetime | None = None
+
+
+class AuthResponse(ApiModel):
+    user: UserResponse
+
+
+class ProjectCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=2000)
+
+
+class ProjectJoinRequest(BaseModel):
+    teamy_code: str = Field(min_length=6, max_length=32)
+
+
+class ProjectUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+
+
+class ProjectArchiveRequest(BaseModel):
+    confirm_archive: Literal[True]
+
+
+class ProjectDeleteRequest(BaseModel):
+    confirm_name: str = Field(min_length=1, max_length=160)
+
+
+class ProjectResponse(ApiModel):
+    id: UUID
+    name: str
+    description: str | None = None
+    teamy_code: str
+    role: str
+    member_count: int
+    archived_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class ProjectListResponse(ApiModel):
@@ -68,8 +131,8 @@ class ProjectListResponse(ApiModel):
 
 
 TaskStatus = Literal["todo", "in_progress", "for_review", "done"]
-TaskPriority = Literal["low", "medium", "high"]
 AssigneeStatus = Literal["todo", "in_progress", "ready_for_review"]
+PersonalTaskKind = Literal["task", "ticket", "note"]
 FileResourceKind = Literal["doc", "link"]
 
 
@@ -163,11 +226,12 @@ class TaskResponse(ApiModel):
     project_id: UUID
     title: str
     description: str | None = None
-    priority: TaskPriority
     start_date: date
     due_date: date | None = None
     status: TaskStatus
     is_record_only: bool
+    is_private: bool
+    personal_kind: PersonalTaskKind
     created_by: UserResponse
     reviewed_by: UserResponse | None = None
     reviewed_at: datetime | None = None
@@ -253,25 +317,25 @@ class TaskCreateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=4000)
     assignee_ids: list[UUID] = Field(min_length=1)
-    priority: TaskPriority = "medium"
     start_date: date | None = None
     due_date: date | None = None
     initial_status: Literal["todo", "in_progress"] = "todo"
     linked_file: TaskLinkedFileCreateRequest | None = None
     is_record_only: bool = False
+    is_private: bool = False
+    personal_kind: PersonalTaskKind = "task"
 
 
 class TaskUpdateRequest(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=4000)
     assignee_ids: list[UUID] | None = None
-    priority: TaskPriority | None = None
     start_date: date | None = None
     due_date: date | None = None
 
 
 class TaskAssigneeUpdateRequest(BaseModel):
-    status: Literal["in_progress", "ready_for_review"]
+    status: Literal["todo", "in_progress", "ready_for_review", "done"]
 
 
 class TaskReviewRequest(BaseModel):
