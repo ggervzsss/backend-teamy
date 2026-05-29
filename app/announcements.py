@@ -5,7 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -397,6 +397,24 @@ async def mark_announcement_deadline_done(
     broadcast_announcement = await serialize_announcement(db, announcement, user.id, is_read=False)
     await manager.broadcast(project.id, {"event": "announcement.updated", "announcement": broadcast_announcement})
     return response
+
+
+@router.delete("/{announcement_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_announcement(
+    announcement_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    project, project_member = membership
+    require_project_active(project)
+    announcement = await get_announcement_for_project(db, project.id, announcement_id)
+    require_announcement_manager(project_member, announcement, user)
+
+    await db.execute(delete(AnnouncementRead).where(AnnouncementRead.announcement_id == announcement.id))
+    await db.delete(announcement)
+    await db.commit()
+    await manager.broadcast(project.id, {"event": "announcement.deleted", "announcement_id": announcement_id})
 
 
 @router.post("/{announcement_id}/notify", status_code=status.HTTP_204_NO_CONTENT)

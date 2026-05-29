@@ -250,6 +250,81 @@ async def test_creator_or_leader_can_edit_announcement(client):
 
 
 @pytest.mark.asyncio
+async def test_creator_or_leader_can_delete_announcements(client):
+    project, leader, member = await setup_project(client)
+    await logout(client)
+    await login(client, member.email, member.full_name)
+    created = await client.post(
+        f"/projects/{project['id']}/announcements",
+        json={"title": "Temporary update", "body": "This can be removed."},
+    )
+    assert created.status_code == 201
+    announcement_id = created.json()["id"]
+
+    creator_delete = await client.delete(f"/projects/{project['id']}/announcements/{announcement_id}")
+    assert creator_delete.status_code == 204
+
+    listed_after_creator_delete = await client.get(f"/projects/{project['id']}/announcements")
+    assert listed_after_creator_delete.status_code == 200
+    assert listed_after_creator_delete.json()["announcements"] == []
+
+    await logout(client)
+    await login(client, member.email, member.full_name)
+    second_created = await client.post(
+        f"/projects/{project['id']}/announcements",
+        json={"title": "Leader cleanup", "body": "Leader can remove this."},
+    )
+    assert second_created.status_code == 201
+    second_announcement_id = second_created.json()["id"]
+    await logout(client)
+
+    await login(client, leader.email, leader.full_name)
+    leader_delete = await client.delete(f"/projects/{project['id']}/announcements/{second_announcement_id}")
+    assert leader_delete.status_code == 204
+
+    listed_after_leader_delete = await client.get(f"/projects/{project['id']}/announcements")
+    assert listed_after_leader_delete.status_code == 200
+    assert listed_after_leader_delete.json()["announcements"] == []
+
+
+@pytest.mark.asyncio
+async def test_done_announcement_can_be_deleted(client):
+    project, _, member = await setup_project(client)
+    await logout(client)
+    await login(client, member.email, member.full_name)
+    created = await client.post(
+        f"/projects/{project['id']}/announcements",
+        json={"title": "Completed reminder", "body": "Remove after done."},
+    )
+    announcement_id = created.json()["id"]
+    marked = await client.patch(f"/projects/{project['id']}/announcements/{announcement_id}/deadline-done")
+    assert marked.status_code == 200
+
+    deleted = await client.delete(f"/projects/{project['id']}/announcements/{announcement_id}")
+    assert deleted.status_code == 204
+
+    listed = await client.get(f"/projects/{project['id']}/announcements")
+    assert listed.status_code == 200
+    assert listed.json()["announcements"] == []
+
+
+@pytest.mark.asyncio
+async def test_non_creator_member_cannot_delete_announcement(client):
+    project, _, member = await setup_project(client)
+    created = await client.post(
+        f"/projects/{project['id']}/announcements",
+        json={"title": "Leader note", "body": "Only leader can delete this."},
+    )
+    announcement_id = created.json()["id"]
+    await logout(client)
+
+    await login(client, member.email, member.full_name)
+    deleted = await client.delete(f"/projects/{project['id']}/announcements/{announcement_id}")
+
+    assert deleted.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_non_members_cannot_access_announcements(client):
     project, _, _ = await setup_project(client)
     await logout(client)
