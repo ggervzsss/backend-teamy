@@ -489,25 +489,21 @@ async def link_task_file(
 async def link_existing_task_file(
     task_id: UUID,
     payload: TaskExistingFileLinkRequest,
+    user: Annotated[User, Depends(get_current_user)],
     membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
     db: AsyncSession = Depends(get_db),
 ) -> TaskResponse:
-    project, _ = membership
+    project, project_member = membership
     require_project_active(project)
     task = await get_task_for_project(db, project.id, task_id)
+    require_private_task_owner(task, user)
     if task.is_private:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Private items cannot link shared resources")
+    is_assignee = await user_is_task_assignee(db, task.id, user.id)
+    if project_member.role != "leader" and task.created_by_user_id != user.id and not is_assignee:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only assigned members, task creators, or project leaders can link task resources")
+
     resource_result = await db.execute(select(FileResource).where(FileResource.project_id == project.id, FileResource.id == payload.file_id))
-    resource = resource_result.scalar_one_or_none()
-    if resource is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File resource not found")
-
-    existing_link_result = await db.execute(select(TaskFileLink).where(TaskFileLink.task_id == task.id, TaskFileLink.file_resource_id == resource.id))
-    if existing_link_result.scalar_one_or_none() is None:
-        db.add(TaskFileLink(task_id=task.id, file_resource_id=resource.id))
-        await db.commit()
-        await db.refresh(task)
-
     resource = resource_result.scalar_one_or_none()
     if resource is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File resource not found")

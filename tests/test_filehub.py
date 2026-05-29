@@ -170,7 +170,47 @@ async def test_creating_task_with_external_link_links_file(client):
 
 
 @pytest.mark.asyncio
-async def test_project_members_can_link_existing_resource_to_task(client):
+async def test_assigned_members_can_link_existing_resource_to_task(client):
+    project, _, member = await setup_project(client)
+
+    resource = await client.post(
+        f"/projects/{project['id']}/files",
+        json={"kind": "link", "title": "Existing Brief", "url": "https://example.com/brief"},
+    )
+    assert resource.status_code == 201
+
+    task = await client.post(
+        f"/projects/{project['id']}/tasks",
+        json={"title": "Review brief", "assignee_ids": [str(member.id)], "initial_status": "todo"},
+    )
+    assert task.status_code == 201
+    await logout(client)
+    await login(client, member.email, member.full_name)
+
+    linked = await client.post(
+        f"/projects/{project['id']}/tasks/{task.json()['id']}/linked-files/existing",
+        json={"file_id": resource.json()["id"]},
+    )
+
+    assert linked.status_code == 201
+    body = linked.json()
+    assert body["linked_files"][0]["id"] == resource.json()["id"]
+    assert body["linked_files"][0]["title"] == "Existing Brief"
+
+    relinked = await client.post(
+        f"/projects/{project['id']}/tasks/{task.json()['id']}/linked-files/existing",
+        json={"file_id": resource.json()["id"]},
+    )
+    assert relinked.status_code == 201
+    assert len(relinked.json()["linked_files"]) == 1
+
+    listed = await client.get(f"/projects/{project['id']}/files")
+    assert listed.status_code == 200
+    assert listed.json()["files"][0]["linked_tasks"][0]["id"] == task.json()["id"]
+
+
+@pytest.mark.asyncio
+async def test_unassigned_members_cannot_link_existing_resource_to_task(client):
     project, _, member = await setup_project(client)
     await logout(client)
     other_member = await signup(client, "files-other-member@example.com", "Files Other Member")
@@ -199,19 +239,4 @@ async def test_project_members_can_link_existing_resource_to_task(client):
         json={"file_id": resource.json()["id"]},
     )
 
-    assert linked.status_code == 201
-    body = linked.json()
-    assert body["linked_files"][0]["id"] == resource.json()["id"]
-    assert body["linked_files"][0]["title"] == "Existing Brief"
-
-    relinked = await client.post(
-        f"/projects/{project['id']}/tasks/{task.json()['id']}/linked-files/existing",
-        json={"file_id": resource.json()["id"]},
-    )
-    assert relinked.status_code == 201
-    assert len(relinked.json()["linked_files"]) == 1
-
-    listed = await client.get(f"/projects/{project['id']}/files")
-    assert listed.status_code == 200
-    assert listed.json()["files"][0]["linked_tasks"][0]["id"] == task.json()["id"]
-
+    assert linked.status_code == 403
