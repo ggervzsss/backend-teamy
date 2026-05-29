@@ -24,6 +24,36 @@ uv run alembic upgrade head
 uv run uvicorn app.main:app --reload
 ```
 
+### Render deployment
+
+Deploy the backend as a Docker web service. Leave the Render Docker Command blank so Render uses the Dockerfile `CMD`, or set it explicitly to:
+
+```sh
+./entrypoint.sh
+```
+
+The first runtime log line should be:
+
+```text
+Teamy entrypoint reached; running Docker image startup command.
+```
+
+If that line does not appear after `Deploying...`, the Render service is running a dashboard-level Docker Command instead of the image startup command.
+
+Required production environment variables:
+
+```text
+DATABASE_URL=mysql+aiomysql://USER:PASSWORD@HOST:3306/teamy?charset=utf8mb4
+DATABASE_SSL=true
+SECRET_KEY=<long random value>
+FRONTEND_URL=https://your-frontend-domain
+CORS_ORIGINS_RAW=https://your-frontend-domain
+COOKIE_SECURE=true
+COOKIE_SAMESITE=none
+```
+
+Do not use a Render PostgreSQL database URL for `DATABASE_URL`; this backend is configured for MySQL-compatible databases such as MySQL or TiDB Cloud. Render provides `PORT` automatically and the entrypoint binds Uvicorn to that value.
+
 ### Email notifications
 
 Set `RESEND_API_KEY` and `RESEND_FROM_EMAIL` in the backend environment to enable email notifications. `RESEND_FROM_EMAIL` should use a sender/domain verified in Resend for production.
