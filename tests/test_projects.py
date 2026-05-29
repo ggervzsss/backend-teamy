@@ -1,3 +1,6 @@
+import json
+from uuid import uuid4
+
 import pytest
 
 
@@ -181,3 +184,182 @@ async def test_member_cannot_export_project_backup(client):
     exported = await client.get(f"/projects/{project['id']}/export")
 
     assert exported.status_code == 403
+
+
+def make_backup_payload(project_id=None, leader_id=None, task_id=None, resource_id=None, link_id=None, assignee_id=None, announcement_id=None):
+    project_id = project_id or uuid4()
+    leader_id = leader_id or uuid4()
+    task_id = task_id or uuid4()
+    resource_id = resource_id or uuid4()
+    link_id = link_id or uuid4()
+    assignee_id = assignee_id or uuid4()
+    announcement_id = announcement_id or uuid4()
+    created_at = "2026-05-29T00:00:00+00:00"
+    return {
+        "format": "teamy_project_backup",
+        "schema_version": 1,
+        "exported_at": created_at,
+        "exported_by_user_id": str(leader_id),
+        "project": {
+            "id": str(project_id),
+            "name": "Imported Production Copy",
+            "description": "Copied from production",
+            "teamy_code": "TMY-IMPT-001",
+            "created_by_user_id": str(leader_id),
+            "archived_at": None,
+            "created_at": created_at,
+            "updated_at": created_at,
+        },
+        "users": [
+            {
+                "id": str(leader_id),
+                "email": "prod-leader@example.com",
+                "full_name": "Prod Leader",
+                "username": "prodleader",
+                "auth_provider": "google",
+                "avatar_url": None,
+                "google_avatar_url": None,
+                "last_online_at": None,
+                "created_at": created_at,
+                "updated_at": created_at,
+            }
+        ],
+        "members": [
+            {
+                "id": str(uuid4()),
+                "project_id": str(project_id),
+                "user_id": str(leader_id),
+                "role": "leader",
+                "nickname": None,
+                "joined_at": created_at,
+            }
+        ],
+        "tasks": [
+            {
+                "id": str(task_id),
+                "project_id": str(project_id),
+                "title": "Imported task",
+                "description": "Verify imported task data.",
+                "start_date": "2026-05-29",
+                "due_date": "2026-06-01",
+                "status": "in_progress",
+                "is_record_only": False,
+                "is_private": False,
+                "personal_kind": "task",
+                "created_by_user_id": str(leader_id),
+                "reviewed_by_user_id": None,
+                "reviewed_at": None,
+                "review_remarks": None,
+                "created_at": created_at,
+                "updated_at": created_at,
+            }
+        ],
+        "task_assignees": [
+            {
+                "id": str(assignee_id),
+                "task_id": str(task_id),
+                "user_id": str(leader_id),
+                "status": "in_progress",
+                "completed_at": None,
+                "created_at": created_at,
+                "updated_at": created_at,
+            }
+        ],
+        "file_resources": [
+            {
+                "id": str(resource_id),
+                "project_id": str(project_id),
+                "title": "Imported resource",
+                "kind": "link",
+                "url": "https://example.com/imported",
+                "content_html": None,
+                "created_by_user_id": str(leader_id),
+                "created_at": created_at,
+                "updated_at": created_at,
+            }
+        ],
+        "task_file_links": [
+            {
+                "id": str(link_id),
+                "task_id": str(task_id),
+                "file_resource_id": str(resource_id),
+                "created_at": created_at,
+            }
+        ],
+        "announcements": [
+            {
+                "id": str(announcement_id),
+                "project_id": str(project_id),
+                "title": "Imported announcement",
+                "body": "Production announcement copy.",
+                "is_pinned": True,
+                "deadline_date": None,
+                "deadline_done_at": None,
+                "is_record_only": False,
+                "created_by_user_id": str(leader_id),
+                "created_at": created_at,
+                "updated_at": created_at,
+            }
+        ],
+        "announcement_reads": [],
+        "notifications": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_authenticated_user_can_import_project_backup(client):
+    await signup(client, "dev-importer@example.com", "Dev Importer")
+    backup = make_backup_payload()
+
+    imported = await client.post(
+        "/projects/import",
+        files={"backup": ("teamy-backup.json", json.dumps(backup), "application/json")},
+    )
+
+    assert imported.status_code == 201
+    body = imported.json()
+    assert body["id"] == backup["project"]["id"]
+    assert body["name"] == "Imported Production Copy"
+    assert body["role"] == "leader"
+    assert body["member_count"] == 2
+
+    tasks = await client.get(f"/projects/{body['id']}/tasks")
+    assert tasks.status_code == 200
+    assert tasks.json()["tasks"][0]["id"] == backup["tasks"][0]["id"]
+    assert tasks.json()["tasks"][0]["linked_files"][0]["id"] == backup["file_resources"][0]["id"]
+
+    files = await client.get(f"/projects/{body['id']}/files")
+    assert files.status_code == 200
+    assert files.json()["files"][0]["linked_tasks"][0]["id"] == backup["tasks"][0]["id"]
+
+    announcements = await client.get(f"/projects/{body['id']}/announcements")
+    assert announcements.status_code == 200
+    assert announcements.json()["announcements"][0]["title"] == "Imported announcement"
+
+    duplicate = await client.post(
+        "/projects/import",
+        files={"backup": ("teamy-backup.json", json.dumps(backup), "application/json")},
+    )
+    assert duplicate.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_project_import_remaps_existing_user_by_email(client):
+    importer = await client._login_user("prod-leader@example.com", "Local Dev Leader")
+    backup_user_id = uuid4()
+    backup = make_backup_payload(project_id=uuid4(), leader_id=backup_user_id)
+
+    imported = await client.post(
+        "/projects/import",
+        files={"backup": ("teamy-backup.json", json.dumps(backup), "application/json")},
+    )
+
+    assert imported.status_code == 201
+    body = imported.json()
+    assert body["member_count"] == 1
+
+    tasks = await client.get(f"/projects/{body['id']}/tasks")
+    assert tasks.status_code == 200
+    assignees = tasks.json()["tasks"][0]["assignees"]
+    assert assignees[0]["user"]["id"] == str(importer.id)
+    assert assignees[0]["user"]["id"] != str(backup_user_id)
