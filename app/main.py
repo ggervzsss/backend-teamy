@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.gzip import GZipMiddleware
 
 from app.announcements import router as announcements_router
 from app.auth import router as auth_router
@@ -28,6 +29,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(GZipMiddleware, minimum_size=500)
 
     app.include_router(auth_router)
     app.include_router(projects_router)

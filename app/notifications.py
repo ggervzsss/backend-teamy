@@ -107,7 +107,6 @@ async def create_user_notifications(
         return
     await db.flush()
     for notification in created_notifications:
-        await db.refresh(notification)
         await manager.broadcast(notification.user_id, {"event": "notification.created", "notification": serialize_notification(notification)})
 
 

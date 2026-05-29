@@ -1,3 +1,4 @@
+from collections import defaultdict
 from typing import Annotated
 from uuid import UUID
 
@@ -76,6 +77,67 @@ async def get_file_for_project(db: AsyncSession, project_id: UUID, file_id: UUID
     return resource
 
 
+async def serialize_file_resources_batch(
+    db: AsyncSession, resources: list[FileResource]
+) -> list[FileResourceSummaryResponse]:
+    if not resources:
+        return []
+
+    creator_ids = list({r.created_by_user_id for r in resources})
+    file_ids = [r.id for r in resources]
+    project_id = resources[0].project_id
+
+    # Batch-fetch all creator Users — ONE query
+    users_result = await db.execute(select(User).where(User.id.in_(creator_ids)))
+    users_by_id = {u.id: u for u in users_result.scalars().all()}
+
+    # Batch-fetch all ProjectMembers for creators — ONE query
+    members_result = await db.execute(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id.in_(creator_ids),
+        )
+    )
+    members_by_user_id = {m.user_id: m for m in members_result.scalars().all()}
+
+    # Batch-fetch all linked tasks for every file — ONE query
+    tasks_result = await db.execute(
+        select(TaskFileLink, Task)
+        .join(Task, Task.id == TaskFileLink.task_id)
+        .where(TaskFileLink.file_resource_id.in_(file_ids))
+        .order_by(Task.created_at.desc())
+    )
+    linked_tasks_by_file_id: dict[UUID, list[LinkedTaskResponse]] = defaultdict(list)
+    for link, task in tasks_result.all():
+        linked_tasks_by_file_id[link.file_resource_id].append(
+            LinkedTaskResponse(id=task.id, title=task.title, status=task.status)
+        )
+
+    summaries: list[FileResourceSummaryResponse] = []
+    for resource in resources:
+        creator = users_by_id.get(resource.created_by_user_id)
+        if creator is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="File creator could not be loaded",
+            )
+        creator_member = members_by_user_id.get(creator.id)
+        summaries.append(
+            FileResourceSummaryResponse(
+                id=resource.id,
+                project_id=resource.project_id,
+                title=resource.title,
+                kind=resource.kind,
+                url=resource.url,
+                created_by=serialize_project_user(creator, creator_member),
+                linked_tasks=linked_tasks_by_file_id.get(resource.id, []),
+                created_at=resource.created_at,
+                updated_at=resource.updated_at,
+            )
+        )
+    return summaries
+
+
 @router.get("", response_model=FileResourceListResponse)
 async def list_file_resources(
     membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
@@ -83,7 +145,8 @@ async def list_file_resources(
 ) -> FileResourceListResponse:
     project, _ = membership
     result = await db.execute(select(FileResource).where(FileResource.project_id == project.id).order_by(FileResource.updated_at.desc(), FileResource.created_at.desc()))
-    return FileResourceListResponse(files=[await serialize_file_resource(db, resource) for resource in result.scalars().all()])
+    resources = result.scalars().all()
+    return FileResourceListResponse(files=await serialize_file_resources_batch(db, list(resources)))
 
 
 @router.post("", response_model=FileResourceResponse, status_code=status.HTTP_201_CREATED)

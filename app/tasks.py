@@ -1,4 +1,4 @@
-﻿from collections import defaultdict
+from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
@@ -219,6 +219,112 @@ async def move_task_after_assignee_update(db: AsyncSession, task: Task) -> None:
     task.reviewed_at = None
 
 
+async def serialize_tasks_batch(db: AsyncSession, tasks: list[Task], project_id: UUID) -> list[TaskResponse]:
+    if not tasks:
+        return []
+
+    task_ids = [t.id for t in tasks]
+    task_map = {t.id: t for t in tasks}
+
+    # Collect all user IDs needed (creators + reviewers)
+    user_ids: set[UUID] = set()
+    for t in tasks:
+        user_ids.add(t.created_by_user_id)
+        if t.reviewed_by_user_id:
+            user_ids.add(t.reviewed_by_user_id)
+
+    # Batch 1: Fetch all needed Users — ONE query
+    user_result = await db.execute(select(User).where(User.id.in_(user_ids)))
+    users_by_id: dict[UUID, User] = {u.id: u for u in user_result.scalars().all()}
+
+    # Batch 2: Fetch all ProjectMembers for those users — ONE query
+    member_result = await db.execute(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id.in_(user_ids),
+        )
+    )
+    members_by_user_id: dict[UUID, ProjectMember] = {m.user_id: m for m in member_result.scalars().all()}
+
+    # Batch 3: Fetch ALL assignees with user + member data — ONE query
+    assignee_result = await db.execute(
+        select(TaskAssignee, User, ProjectMember)
+        .join(User, User.id == TaskAssignee.user_id)
+        .join(ProjectMember, (ProjectMember.user_id == User.id) & (ProjectMember.project_id == project_id))
+        .where(TaskAssignee.task_id.in_(task_ids))
+        .order_by(User.full_name.asc(), User.email.asc())
+    )
+    assignees_by_task: dict[UUID, list[TaskAssigneeResponse]] = defaultdict(list)
+    for assignee, user, member in assignee_result.all():
+        assignees_by_task[assignee.task_id].append(
+            TaskAssigneeResponse(
+                id=assignee.id,
+                user=serialize_project_user(user, member),
+                status=assignee.status,
+                completed_at=assignee.completed_at,
+            )
+        )
+
+    # Batch 4: Fetch ALL linked files with creator data — ONE query
+    linked_result = await db.execute(
+        select(TaskFileLink, FileResource, User, ProjectMember)
+        .join(FileResource, FileResource.id == TaskFileLink.file_resource_id)
+        .join(User, User.id == FileResource.created_by_user_id)
+        .join(ProjectMember, (ProjectMember.user_id == User.id) & (ProjectMember.project_id == project_id))
+        .where(TaskFileLink.task_id.in_(task_ids))
+        .order_by(FileResource.updated_at.desc(), FileResource.created_at.desc())
+    )
+    files_by_task: dict[UUID, list[FileResourceSummaryResponse]] = defaultdict(list)
+    for link, resource, creator, member in linked_result.all():
+        task = task_map[link.task_id]
+        linked_task = LinkedTaskResponse(id=task.id, title=task.title, status=task.status)
+        files_by_task[link.task_id].append(
+            FileResourceSummaryResponse(
+                id=resource.id,
+                project_id=resource.project_id,
+                title=resource.title,
+                kind=resource.kind,
+                url=resource.url,
+                created_by=serialize_project_user(creator, member),
+                linked_tasks=[linked_task],
+                created_at=resource.created_at,
+                updated_at=resource.updated_at,
+            )
+        )
+
+    # Assemble TaskResponse objects
+    results: list[TaskResponse] = []
+    for task in tasks:
+        creator = users_by_id.get(task.created_by_user_id)
+        if creator is None:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Task creator could not be loaded")
+        creator_member = members_by_user_id.get(creator.id)
+        reviewed_by = users_by_id.get(task.reviewed_by_user_id) if task.reviewed_by_user_id else None
+        reviewed_by_member = members_by_user_id.get(reviewed_by.id) if reviewed_by else None
+
+        results.append(TaskResponse(
+            id=task.id,
+            project_id=task.project_id,
+            title=task.title,
+            description=task.description,
+            start_date=task.start_date,
+            due_date=task.due_date,
+            status=task.status,
+            is_record_only=task.is_record_only,
+            is_private=task.is_private,
+            personal_kind=task.personal_kind,
+            created_by=serialize_project_user(creator, creator_member),
+            reviewed_by=serialize_project_user(reviewed_by, reviewed_by_member) if reviewed_by else None,
+            reviewed_at=task.reviewed_at,
+            review_remarks=task.review_remarks,
+            assignees=assignees_by_task.get(task.id, []),
+            linked_files=files_by_task.get(task.id, []),
+            created_at=task.created_at,
+            updated_at=task.updated_at,
+        ))
+    return results
+
+
 @router.get("/members", response_model=ProjectMemberListResponse)
 async def list_project_members(
     membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
@@ -252,8 +358,8 @@ async def list_tasks(
 ) -> TaskListResponse:
     project, _ = membership
     result = await db.execute(select(Task).where(Task.project_id == project.id, Task.is_private.is_(False)).order_by(Task.created_at.desc()))
-    tasks = [await serialize_task(db, task) for task in result.scalars().all()]
-    return TaskListResponse(tasks=tasks)
+    tasks = list(result.scalars().all())
+    return TaskListResponse(tasks=await serialize_tasks_batch(db, tasks, project.id))
 
 
 @router.get("/tasks/me", response_model=TaskListResponse)
@@ -269,8 +375,8 @@ async def list_my_tasks(
         .where(Task.project_id == project.id, TaskAssignee.user_id == user.id)
         .order_by(Task.created_at.desc())
     )
-    tasks = [await serialize_task(db, task) for task in result.scalars().all()]
-    return TaskListResponse(tasks=tasks)
+    tasks = list(result.scalars().all())
+    return TaskListResponse(tasks=await serialize_tasks_batch(db, tasks, project.id))
 
 
 @router.get("/tasks/ws-ticket", response_model=TaskSocketTicketResponse)

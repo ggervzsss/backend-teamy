@@ -80,8 +80,19 @@ async def mark_announcement_read(db: AsyncSession, announcement_id: UUID, user_i
 
 
 async def mark_announcement_read_for_users(db: AsyncSession, announcement_id: UUID, user_ids: set[UUID]) -> None:
-    for user_id in user_ids:
-        await mark_announcement_read(db, announcement_id, user_id)
+    if not user_ids:
+        return
+    result = await db.execute(
+        select(AnnouncementRead.user_id).where(
+            AnnouncementRead.announcement_id == announcement_id,
+            AnnouncementRead.user_id.in_(user_ids),
+        )
+    )
+    already_read = set(result.scalars().all())
+    read_at = datetime.now(UTC)
+    for user_id in user_ids - already_read:
+        db.add(AnnouncementRead(announcement_id=announcement_id, user_id=user_id, read_at=read_at))
+    await db.flush()
 
 
 async def get_project_member_user_ids(db: AsyncSession, project_id: UUID) -> set[UUID]:
@@ -152,6 +163,61 @@ def require_announcement_manager(project_member: ProjectMember, announcement: An
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the announcement creator or project leader can edit this announcement")
 
 
+async def serialize_announcements_batch(db: AsyncSession, announcements: list[Announcement], user_id: UUID) -> list[AnnouncementResponse]:
+    if not announcements:
+        return []
+
+    creator_user_ids = {a.created_by_user_id for a in announcements}
+    announcement_ids = [a.id for a in announcements]
+    project_id = announcements[0].project_id
+
+    # Batch-fetch all creator Users in one query
+    users_result = await db.execute(select(User).where(User.id.in_(creator_user_ids)))
+    users_by_id = {u.id: u for u in users_result.scalars().all()}
+
+    # Batch-fetch all ProjectMembers for those creators in one query
+    members_result = await db.execute(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id.in_(creator_user_ids),
+        )
+    )
+    members_by_user_id = {m.user_id: m for m in members_result.scalars().all()}
+
+    # Batch-fetch read statuses in one query
+    read_result = await db.execute(
+        select(AnnouncementRead.announcement_id).where(
+            AnnouncementRead.announcement_id.in_(announcement_ids),
+            AnnouncementRead.user_id == user_id,
+        )
+    )
+    read_announcement_ids = set(read_result.scalars().all())
+
+    responses: list[AnnouncementResponse] = []
+    for announcement in announcements:
+        creator = users_by_id.get(announcement.created_by_user_id)
+        if creator is None:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Announcement creator could not be loaded")
+        creator_member = members_by_user_id.get(announcement.created_by_user_id)
+        responses.append(
+            AnnouncementResponse(
+                id=announcement.id,
+                project_id=announcement.project_id,
+                title=announcement.title,
+                body=announcement.body,
+                is_pinned=announcement.is_pinned,
+                deadline_date=announcement.deadline_date,
+                deadline_done_at=announcement.deadline_done_at,
+                is_record_only=announcement.is_record_only,
+                is_read=announcement.id in read_announcement_ids,
+                created_by=serialize_project_user(creator, creator_member),
+                created_at=announcement.created_at,
+                updated_at=announcement.updated_at,
+            )
+        )
+    return responses
+
+
 @router.get("", response_model=AnnouncementListResponse)
 async def list_announcements(
     user: Annotated[User, Depends(get_current_user)],
@@ -164,14 +230,14 @@ async def list_announcements(
         .where(Announcement.project_id == project.id)
         .order_by(Announcement.is_pinned.desc(), Announcement.created_at.desc(), Announcement.updated_at.desc())
     )
-    announcements = result.scalars().all()
+    announcements = list(result.scalars().all())
     did_sync_state = False
     for announcement in announcements:
         did_sync_state = sync_automatic_announcement_state(announcement) or did_sync_state
     if did_sync_state:
         await db.commit()
     return AnnouncementListResponse(
-        announcements=[await serialize_announcement(db, announcement, user.id) for announcement in announcements]
+        announcements=await serialize_announcements_batch(db, announcements, user.id)
     )
 
 
@@ -233,7 +299,7 @@ async def create_announcement(
     await db.refresh(announcement)
 
     response = await serialize_announcement(db, announcement, user.id, is_read=True)
-    broadcast_announcement = await serialize_announcement(db, announcement, user.id, is_read=True if announcement.is_record_only else False)
+    broadcast_announcement = response.model_copy(update={"is_read": True if announcement.is_record_only else False})
     if not payload.is_record_only:
         recipients = await get_project_member_recipients(db, project.id)
         background_tasks.add_task(
@@ -294,7 +360,7 @@ async def update_announcement(
     await db.refresh(announcement)
 
     response = await serialize_announcement(db, announcement, user.id)
-    broadcast_announcement = await serialize_announcement(db, announcement, user.id, is_read=True if announcement.is_record_only else False)
+    broadcast_announcement = response.model_copy(update={"is_read": True if announcement.is_record_only else False})
     await manager.broadcast(project.id, {"event": "announcement.updated", "announcement": broadcast_announcement})
     return response
 
@@ -372,7 +438,7 @@ async def update_announcement_pin(
     await db.refresh(announcement)
 
     response = await serialize_announcement(db, announcement, user.id)
-    broadcast_announcement = await serialize_announcement(db, announcement, user.id, is_read=False)
+    broadcast_announcement = response.model_copy(update={"is_read": False})
     await manager.broadcast(project.id, {"event": "announcement.updated", "announcement": broadcast_announcement})
     return response
 
@@ -394,7 +460,7 @@ async def mark_announcement_deadline_done(
     await db.refresh(announcement)
 
     response = await serialize_announcement(db, announcement, user.id)
-    broadcast_announcement = await serialize_announcement(db, announcement, user.id, is_read=False)
+    broadcast_announcement = response.model_copy(update={"is_read": False})
     await manager.broadcast(project.id, {"event": "announcement.updated", "announcement": broadcast_announcement})
     return response
 
