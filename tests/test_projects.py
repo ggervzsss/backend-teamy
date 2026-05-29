@@ -116,3 +116,68 @@ async def test_member_cannot_manage_project_settings(client):
     assert rename.status_code == 403
     assert archive.status_code == 403
     assert delete.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_leader_can_export_project_backup(client):
+    leader = await client._login_user("backup-leader@example.com", "Backup Leader")
+    created = await client.post("/projects", json={"name": "Backup Workspace", "description": "Portable test data"})
+    assert created.status_code == 201
+    project = created.json()
+    await client.post("/auth/logout")
+
+    member = await client._login_user("backup-member@example.com", "Backup Member")
+    joined = await client.post("/projects/join", json={"teamy_code": project["teamy_code"]})
+    assert joined.status_code == 200
+    await client.post("/auth/logout")
+
+    await client._login_user(leader.email, leader.full_name)
+    task = await client.post(
+        f"/projects/{project['id']}/tasks",
+        json={"title": "Export task", "assignee_ids": [str(member.id)], "initial_status": "todo"},
+    )
+    assert task.status_code == 201
+    resource = await client.post(
+        f"/projects/{project['id']}/files",
+        json={"kind": "link", "title": "Export link", "url": "https://example.com/export"},
+    )
+    assert resource.status_code == 201
+    linked = await client.post(
+        f"/projects/{project['id']}/tasks/{task.json()['id']}/linked-files/existing",
+        json={"file_id": resource.json()["id"]},
+    )
+    assert linked.status_code == 201
+    announcement = await client.post(f"/projects/{project['id']}/announcements", json={"title": "Export announcement", "body": "Snapshot this."})
+    assert announcement.status_code == 201
+
+    exported = await client.get(f"/projects/{project['id']}/export")
+
+    assert exported.status_code == 200
+    assert exported.headers["content-disposition"].startswith('attachment; filename="teamy-backup-workspace-')
+    body = exported.json()
+    assert body["format"] == "teamy_project_backup"
+    assert body["schema_version"] == 1
+    assert body["project"]["id"] == project["id"]
+    assert {user["email"] for user in body["users"]} == {"backup-leader@example.com", "backup-member@example.com"}
+    assert body["members"][0]["project_id"] == project["id"]
+    assert body["tasks"][0]["title"] == "Export task"
+    assert body["task_assignees"][0]["user_id"] == str(member.id)
+    assert body["file_resources"][0]["url"] == "https://example.com/export"
+    assert body["task_file_links"][0]["task_id"] == task.json()["id"]
+    assert body["announcements"][0]["title"] == "Export announcement"
+    assert body["counts"]["tasks"] == 1
+
+
+@pytest.mark.asyncio
+async def test_member_cannot_export_project_backup(client):
+    await signup(client, "backup-owner@example.com", "Backup Owner")
+    created = await client.post("/projects", json={"name": "Owner Export Only"})
+    project = created.json()
+    await client.post("/auth/logout")
+
+    await signup(client, "backup-regular-member@example.com", "Backup Regular Member")
+    await client.post("/projects/join", json={"teamy_code": project["teamy_code"]})
+
+    exported = await client.get(f"/projects/{project['id']}/export")
+
+    assert exported.status_code == 403

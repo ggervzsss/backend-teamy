@@ -4,12 +4,14 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Response, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models import Project, ProjectMember, User
+from app.models import Announcement, AnnouncementRead, FileResource, Notification, Project, ProjectMember, Task, TaskAssignee, TaskFileLink, User
 from app.schemas import ProjectArchiveRequest, ProjectCreateRequest, ProjectDeleteRequest, ProjectJoinRequest, ProjectListResponse, ProjectResponse, ProjectUpdateRequest
 from app.team_realtime import broadcast_member_joined
 
@@ -53,6 +55,10 @@ async def serialize_project(db: AsyncSession, project: Project, membership: Proj
         created_at=project.created_at,
         updated_at=project.updated_at,
     )
+
+
+def export_record(instance: object, fields: tuple[str, ...]) -> dict[str, object]:
+    return {field: getattr(instance, field) for field in fields}
 
 
 def require_project_leader(membership: ProjectMember) -> None:
@@ -201,6 +207,135 @@ async def archive_project(
     await db.commit()
     await db.refresh(project)
     return await serialize_project(db, project, project_member)
+
+
+@router.get("/{project_id}/export")
+async def export_project_backup(
+    user: Annotated[User, Depends(get_current_user)],
+    membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    project, project_member = membership
+    require_project_leader(project_member)
+
+    member_result = await db.execute(select(ProjectMember).where(ProjectMember.project_id == project.id).order_by(ProjectMember.joined_at.asc()))
+    members = list(member_result.scalars().all())
+
+    task_result = await db.execute(select(Task).where(Task.project_id == project.id).order_by(Task.created_at.asc()))
+    tasks = list(task_result.scalars().all())
+    task_ids = [task.id for task in tasks]
+
+    if task_ids:
+        assignee_result = await db.execute(select(TaskAssignee).where(TaskAssignee.task_id.in_(task_ids)).order_by(TaskAssignee.created_at.asc()))
+        task_assignees = list(assignee_result.scalars().all())
+        link_result = await db.execute(select(TaskFileLink).where(TaskFileLink.task_id.in_(task_ids)).order_by(TaskFileLink.created_at.asc()))
+        task_file_links = list(link_result.scalars().all())
+    else:
+        task_assignees = []
+        task_file_links = []
+
+    file_result = await db.execute(select(FileResource).where(FileResource.project_id == project.id).order_by(FileResource.created_at.asc()))
+    files = list(file_result.scalars().all())
+
+    announcement_result = await db.execute(select(Announcement).where(Announcement.project_id == project.id).order_by(Announcement.created_at.asc()))
+    announcements = list(announcement_result.scalars().all())
+    announcement_ids = [announcement.id for announcement in announcements]
+
+    if announcement_ids:
+        read_result = await db.execute(select(AnnouncementRead).where(AnnouncementRead.announcement_id.in_(announcement_ids)).order_by(AnnouncementRead.read_at.asc()))
+        announcement_reads = list(read_result.scalars().all())
+    else:
+        announcement_reads = []
+
+    notification_result = await db.execute(select(Notification).where(Notification.project_id == project.id).order_by(Notification.created_at.asc()))
+    notifications = list(notification_result.scalars().all())
+
+    user_ids = {project.created_by_user_id, user.id}
+    user_ids.update(member.user_id for member in members)
+    user_ids.update(task.created_by_user_id for task in tasks)
+    user_ids.update(task.reviewed_by_user_id for task in tasks if task.reviewed_by_user_id)
+    user_ids.update(assignee.user_id for assignee in task_assignees)
+    user_ids.update(file.created_by_user_id for file in files)
+    user_ids.update(announcement.created_by_user_id for announcement in announcements)
+    user_ids.update(read.user_id for read in announcement_reads)
+    user_ids.update(notification.user_id for notification in notifications)
+
+    user_result = await db.execute(select(User).where(User.id.in_(user_ids)).order_by(User.email.asc()))
+    users = list(user_result.scalars().all())
+
+    backup = {
+        "format": "teamy_project_backup",
+        "schema_version": 1,
+        "exported_at": datetime.now(UTC),
+        "exported_by_user_id": user.id,
+        "project": export_record(project, ("id", "name", "description", "teamy_code", "created_by_user_id", "archived_at", "created_at", "updated_at")),
+        "users": [
+            export_record(user_record, ("id", "email", "full_name", "username", "auth_provider", "avatar_url", "google_avatar_url", "last_online_at", "created_at", "updated_at"))
+            for user_record in users
+        ],
+        "members": [export_record(member, ("id", "project_id", "user_id", "role", "nickname", "joined_at")) for member in members],
+        "tasks": [
+            export_record(
+                task,
+                (
+                    "id",
+                    "project_id",
+                    "title",
+                    "description",
+                    "start_date",
+                    "due_date",
+                    "status",
+                    "is_record_only",
+                    "is_private",
+                    "personal_kind",
+                    "created_by_user_id",
+                    "reviewed_by_user_id",
+                    "reviewed_at",
+                    "review_remarks",
+                    "created_at",
+                    "updated_at",
+                ),
+            )
+            for task in tasks
+        ],
+        "task_assignees": [export_record(assignee, ("id", "task_id", "user_id", "status", "completed_at", "created_at", "updated_at")) for assignee in task_assignees],
+        "file_resources": [
+            export_record(file, ("id", "project_id", "title", "kind", "url", "content_html", "created_by_user_id", "created_at", "updated_at")) for file in files
+        ],
+        "task_file_links": [export_record(link, ("id", "task_id", "file_resource_id", "created_at")) for link in task_file_links],
+        "announcements": [
+            export_record(
+                announcement,
+                (
+                    "id",
+                    "project_id",
+                    "title",
+                    "body",
+                    "is_pinned",
+                    "deadline_date",
+                    "deadline_done_at",
+                    "is_record_only",
+                    "created_by_user_id",
+                    "created_at",
+                    "updated_at",
+                ),
+            )
+            for announcement in announcements
+        ],
+        "announcement_reads": [export_record(read, ("id", "announcement_id", "user_id", "read_at")) for read in announcement_reads],
+        "notifications": [
+            export_record(notification, ("id", "user_id", "project_id", "kind", "title", "body", "target_path", "is_email_backed", "read_at", "created_at"))
+            for notification in notifications
+        ],
+    }
+    backup["counts"] = {key: len(value) for key, value in backup.items() if isinstance(value, list)}
+
+    safe_project_name = "-".join(filter(None, ("".join(character.lower() if character.isalnum() else "-" for character in project.name)).split("-"))) or "workspace"
+    filename = f"teamy-{safe_project_name}-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}.json"
+    return JSONResponse(
+        content=jsonable_encoder(backup),
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
