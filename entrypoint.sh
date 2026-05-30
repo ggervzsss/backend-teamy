@@ -5,6 +5,7 @@ APP_PORT="${PORT:-8000}"
 WEB_WORKERS="${WEB_CONCURRENCY:-1}"
 
 echo "Teamy entrypoint reached; running Docker image startup command."
+python -m app.startup_diagnostics
 
 # Run migrations. If Alembic can't find the current revision (e.g. after
 # migration consolidation where old revision IDs were removed), stamp the

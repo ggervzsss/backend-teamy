@@ -26,7 +26,7 @@ uv run uvicorn app.main:app --reload
 
 ### Render deployment
 
-Deploy the backend as a Docker web service. Leave the Render Docker Command blank so Render uses the Dockerfile `CMD`, or set it explicitly to:
+Deploy the backend as a Docker web service. Leave the Render Docker Command blank so Render uses the Dockerfile startup configuration, or set it explicitly to:
 
 ```sh
 ./entrypoint.sh
@@ -38,7 +38,7 @@ The first runtime log line should be:
 Teamy entrypoint reached; running Docker image startup command.
 ```
 
-If that line does not appear after `Deploying...`, the Render service is running a dashboard-level Docker Command instead of the image startup command.
+If that line does not appear after `Deploying...`, the Render service is not running this Docker image's startup path.
 
 Required production environment variables:
 
