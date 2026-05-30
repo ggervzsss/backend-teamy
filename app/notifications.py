@@ -91,6 +91,7 @@ async def create_user_notifications(
     is_email_backed: bool = False,
 ) -> None:
     created_notifications: list[Notification] = []
+    created_at = datetime.now(UTC)
     for user_id in user_ids:
         notification = Notification(
             user_id=user_id,
@@ -100,6 +101,7 @@ async def create_user_notifications(
             body=body,
             target_path=target_path,
             is_email_backed=is_email_backed,
+            created_at=created_at,
         )
         db.add(notification)
         created_notifications.append(notification)

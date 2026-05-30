@@ -257,7 +257,7 @@ class TaskCreateRequest(BaseModel):
     assignee_ids: list[UUID] = Field(min_length=1)
     start_date: date | None = None
     due_date: date | None = None
-    initial_status: Literal["todo", "in_progress"] = "todo"
+    initial_status: Literal["todo", "in_progress", "done"] = "todo"
     linked_file: TaskLinkedFileCreateRequest | None = None
     is_record_only: bool = False
     is_private: bool = False

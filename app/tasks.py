@@ -420,6 +420,8 @@ async def create_task(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Private items cannot link shared resources")
     if payload.is_record_only:
         require_leader(project_member)
+    if payload.initial_status == "done" and not payload.is_record_only:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only record-only tasks can be created as done")
 
     assignee_ids = list(dict.fromkeys(payload.assignee_ids))
     if payload.is_private:
@@ -435,19 +437,20 @@ async def create_task(
     start_date = resolve_task_start_date(payload.start_date, payload.due_date)
     validate_task_date_range(start_date, payload.due_date)
 
-    completed_at = datetime.now(UTC) if payload.is_record_only else None
+    is_done_on_create = payload.initial_status == "done"
+    completed_at = datetime.now(UTC) if is_done_on_create else None
     task = Task(
         project_id=project.id,
         title=payload.title.strip(),
         description=payload.description.strip() if payload.description else None,
         start_date=start_date,
         due_date=payload.due_date,
-        status="done" if payload.is_record_only else payload.initial_status,
+        status=payload.initial_status,
         is_record_only=payload.is_record_only,
         is_private=payload.is_private,
         personal_kind=payload.personal_kind if payload.is_private else "task",
         created_by_user_id=user.id,
-        reviewed_by_user_id=user.id if payload.is_record_only else None,
+        reviewed_by_user_id=user.id if is_done_on_create else None,
         reviewed_at=completed_at,
     )
     db.add(task)
@@ -458,7 +461,7 @@ async def create_task(
             TaskAssignee(
                 task_id=task.id,
                 user_id=assignee_id,
-                status="ready_for_review" if payload.is_record_only else payload.initial_status,
+                status="ready_for_review" if is_done_on_create else payload.initial_status,
                 completed_at=completed_at,
             )
         )
@@ -469,7 +472,7 @@ async def create_task(
         await db.flush()
         db.add(TaskFileLink(task_id=task.id, file_resource_id=resource.id))
 
-    if not payload.is_record_only and not payload.is_private:
+    if not is_done_on_create and not payload.is_private:
         await create_user_notifications(
             db,
             set(assignee_ids),
@@ -483,7 +486,7 @@ async def create_task(
     await db.commit()
     await db.refresh(task)
     response = await serialize_task(db, task)
-    if not payload.is_record_only and not payload.is_private:
+    if not is_done_on_create and not payload.is_private:
         recipients = await get_user_recipients(db, set(assignee_ids))
         background_tasks.add_task(send_task_assignment_email, settings, recipients, project.id, project.name, task.title, task.due_date)
     if not payload.is_private:
