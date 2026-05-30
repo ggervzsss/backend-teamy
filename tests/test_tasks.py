@@ -88,6 +88,32 @@ async def test_task_with_past_due_date_defaults_start_to_due_date(client):
 
 
 @pytest.mark.asyncio
+async def test_in_progress_task_with_past_due_date_stays_active(client):
+    project, _, member_one, _ = await setup_project_with_members(client)
+    past_due_date = (date.today() - timedelta(days=4)).isoformat()
+
+    response = await client.post(
+        f"/projects/{project['id']}/tasks",
+        json={
+            "title": "Late work in progress",
+            "assignee_ids": [member_one["id"]],
+            "due_date": past_due_date,
+            "initial_status": "in_progress",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["status"] == "in_progress"
+    assert body["is_record_only"] is False
+    assert body["reviewed_at"] is None
+    assert body["start_date"] == past_due_date
+    assert body["due_date"] == past_due_date
+    assert body["assignees"][0]["status"] == "in_progress"
+    assert body["assignees"][0]["completed_at"] is None
+
+
+@pytest.mark.asyncio
 async def test_task_due_date_cannot_be_before_explicit_start_date(client):
     project, _, member_one, _ = await setup_project_with_members(client)
     start_date = date.today().isoformat()
