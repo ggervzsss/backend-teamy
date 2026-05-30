@@ -49,6 +49,21 @@ async def test_google_login_sets_session_and_me(client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_google_login_uses_secure_cookie_for_samesite_none(client, monkeypatch):
+    mock_google_client(monkeypatch)
+    client._teamy_settings.cookie_samesite = "none"
+    client._teamy_settings.cookie_secure = False
+    state = create_oauth_state(client._teamy_settings)
+
+    callback = await client.get(f"/auth/google/callback?code=test-code&state={state}", follow_redirects=False)
+
+    assert callback.status_code == 307
+    set_cookie = callback.headers["set-cookie"]
+    assert "SameSite=none" in set_cookie
+    assert "Secure" in set_cookie
+
+
+@pytest.mark.asyncio
 async def test_logout_clears_cookie(client):
     await client._login_user("jane@example.com", "Jane Doe")
     assert "teamy_session" in client.cookies

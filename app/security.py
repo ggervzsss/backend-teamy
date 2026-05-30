@@ -9,6 +9,10 @@ from app.config import Settings
 ALGORITHM = "HS256"
 
 
+def session_cookie_secure(settings: Settings) -> bool:
+    return settings.cookie_secure or settings.cookie_samesite.lower() == "none"
+
+
 def create_session_token(user_id: UUID, settings: Settings) -> str:
     now = datetime.now(UTC)
     payload = {
@@ -135,7 +139,7 @@ def set_session_cookie(response: Response, token: str, settings: Settings) -> No
         value=token,
         max_age=settings.session_max_age_seconds,
         httponly=True,
-        secure=settings.cookie_secure,
+        secure=session_cookie_secure(settings),
         samesite=settings.cookie_samesite,
         path="/",
     )
@@ -145,7 +149,7 @@ def clear_session_cookie(response: Response, settings: Settings) -> None:
     response.delete_cookie(
         key=settings.session_cookie_name,
         httponly=True,
-        secure=settings.cookie_secure,
+        secure=session_cookie_secure(settings),
         samesite=settings.cookie_samesite,
         path="/",
     )
