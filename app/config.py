@@ -7,7 +7,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL, make_url
 
 RESERVED_DATABASE_NAMES = {"information_schema", "mysql", "performance_schema", "sys"}
-SUPPORTED_DATABASE_BACKENDS = {"mysql", "sqlite"}
 
 
 class Settings(BaseSettings):
@@ -38,19 +37,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_database_name(self) -> "Settings":
-        url = make_url(self.database_url)
-        backend = url.drivername.split("+", 1)[0]
-        if backend not in SUPPORTED_DATABASE_BACKENDS:
-            raise ValueError(
-                "DATABASE_URL must use a MySQL-compatible SQLAlchemy URL such as "
-                "mysql+aiomysql://user:password@host:3306/teamy?charset=utf8mb4. "
-                f"Received driver '{url.drivername}'. Render PostgreSQL URLs are not supported by this backend."
-            )
-
-        database_name = url.database
+        database_name = make_url(self.database_url).database
         if database_name is None:
             raise ValueError("DATABASE_URL must include an application database name, for example /teamy")
-        if backend == "mysql" and database_name.lower() in RESERVED_DATABASE_NAMES:
+        if database_name.lower() in RESERVED_DATABASE_NAMES:
             raise ValueError(
                 f"DATABASE_URL points to the MySQL/TiDB system database '{database_name}'. "
                 "Use an application database such as 'teamy' instead."
