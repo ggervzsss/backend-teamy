@@ -202,7 +202,6 @@ async def test_leader_can_create_record_only_task_as_done(client):
             "start_date": "2026-05-01",
             "due_date": "2026-05-02",
             "initial_status": "done",
-            "is_record_only": True,
         },
     )
 
@@ -244,16 +243,33 @@ async def test_leader_can_create_record_only_task_as_active_work(client):
 
 
 @pytest.mark.asyncio
-async def test_non_record_task_cannot_be_created_as_done(client):
+async def test_member_cannot_create_done_task_directly(client):
     project, _, member_one, _ = await setup_project_with_members(client)
+    await logout(client)
+    await login(client, member_one["email"], member_one["full_name"])
 
     response = await client.post(
         f"/projects/{project['id']}/tasks",
         json={"title": "Bypass review", "assignee_ids": [member_one["id"]], "initial_status": "done"},
     )
 
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Only project leaders can perform this action"
+
+
+@pytest.mark.asyncio
+async def test_private_task_cannot_be_created_as_done(client):
+    project, _, member_one, _ = await setup_project_with_members(client)
+    await logout(client)
+    await login(client, member_one["email"], member_one["full_name"])
+
+    response = await client.post(
+        f"/projects/{project['id']}/tasks",
+        json={"title": "Already done note", "assignee_ids": [member_one["id"]], "initial_status": "done", "is_private": True},
+    )
+
     assert response.status_code == 400
-    assert response.json()["detail"] == "Only record-only tasks can be created as done"
+    assert response.json()["detail"] == "Private tasks cannot be record-only"
 
 
 @pytest.mark.asyncio

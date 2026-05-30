@@ -414,14 +414,14 @@ async def create_task(
 ) -> TaskResponse:
     project, project_member = membership
     require_project_active(project)
-    if payload.is_private and payload.is_record_only:
+    is_done_on_create = payload.initial_status == "done"
+    is_record_only = payload.is_record_only or is_done_on_create
+    if payload.is_private and is_record_only:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Private tasks cannot be record-only")
     if payload.is_private and payload.linked_file is not None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Private items cannot link shared resources")
-    if payload.is_record_only:
+    if is_record_only:
         require_leader(project_member)
-    if payload.initial_status == "done" and not payload.is_record_only:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only record-only tasks can be created as done")
 
     assignee_ids = list(dict.fromkeys(payload.assignee_ids))
     if payload.is_private:
@@ -437,7 +437,6 @@ async def create_task(
     start_date = resolve_task_start_date(payload.start_date, payload.due_date)
     validate_task_date_range(start_date, payload.due_date)
 
-    is_done_on_create = payload.initial_status == "done"
     completed_at = datetime.now(UTC) if is_done_on_create else None
     task = Task(
         project_id=project.id,
@@ -446,7 +445,7 @@ async def create_task(
         start_date=start_date,
         due_date=payload.due_date,
         status=payload.initial_status,
-        is_record_only=payload.is_record_only,
+        is_record_only=is_record_only,
         is_private=payload.is_private,
         personal_kind=payload.personal_kind if payload.is_private else "task",
         created_by_user_id=user.id,
