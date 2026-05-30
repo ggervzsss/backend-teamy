@@ -1,5 +1,5 @@
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -101,6 +101,20 @@ def require_private_task_owner(task: Task, user: User) -> None:
 def require_task_manager(project_member: ProjectMember, task: Task, user: User) -> None:
     if project_member.role != "leader" and task.created_by_user_id != user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the task creator or project leader can edit this task")
+
+
+def resolve_task_start_date(start_date: date | None, due_date: date | None) -> date:
+    if start_date is not None:
+        return start_date
+    today = datetime.now(UTC).date()
+    if due_date is not None and due_date < today:
+        return due_date
+    return today
+
+
+def validate_task_date_range(start_date: date, due_date: date | None) -> None:
+    if due_date is not None and due_date < start_date:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Due date cannot be before start date")
 
 
 def build_linked_file_resource(project_id: UUID, user_id: UUID, fallback_title: str, payload: TaskLinkedFileCreateRequest) -> FileResource:
@@ -418,12 +432,15 @@ async def create_task(
     if invalid_assignees:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Every assignee must be a project member")
 
+    start_date = resolve_task_start_date(payload.start_date, payload.due_date)
+    validate_task_date_range(start_date, payload.due_date)
+
     completed_at = datetime.now(UTC) if payload.is_record_only else None
     task = Task(
         project_id=project.id,
         title=payload.title.strip(),
         description=payload.description.strip() if payload.description else None,
-        start_date=payload.start_date if payload.start_date else datetime.now(UTC).date(),
+        start_date=start_date,
         due_date=payload.due_date,
         status="done" if payload.is_record_only else payload.initial_status,
         is_record_only=payload.is_record_only,
@@ -496,10 +513,14 @@ async def update_task(
         task.title = payload.title.strip()
     if "description" in payload.model_fields_set:
         task.description = payload.description.strip() if payload.description else None
+    next_due_date = payload.due_date if "due_date" in payload.model_fields_set else task.due_date
     if "start_date" in payload.model_fields_set:
-        task.start_date = payload.start_date if payload.start_date else datetime.now(UTC).date()
+        task.start_date = resolve_task_start_date(payload.start_date, next_due_date)
     if "due_date" in payload.model_fields_set:
-        task.due_date = payload.due_date
+        task.due_date = next_due_date
+        if "start_date" not in payload.model_fields_set and task.due_date is not None and task.due_date < task.start_date:
+            task.start_date = task.due_date
+    validate_task_date_range(task.start_date, task.due_date)
 
     assignees_changed = False
     newly_assigned_user_ids: set[UUID] = set()

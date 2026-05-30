@@ -1,3 +1,5 @@
+from datetime import date, timedelta
+
 import pytest
 
 
@@ -61,6 +63,67 @@ async def test_leader_can_create_task_assigned_to_multiple_members(client):
     assert body["status"] == "todo"
     assert body["due_date"] == "2026-05-20"
     assert {assignee["user"]["id"] for assignee in body["assignees"]} == {member_one["id"], member_two["id"]}
+
+
+@pytest.mark.asyncio
+async def test_task_with_past_due_date_defaults_start_to_due_date(client):
+    project, _, member_one, _ = await setup_project_with_members(client)
+    past_due_date = (date.today() - timedelta(days=3)).isoformat()
+
+    response = await client.post(
+        f"/projects/{project['id']}/tasks",
+        json={
+            "title": "Already overdue follow-up",
+            "assignee_ids": [member_one["id"]],
+            "due_date": past_due_date,
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["status"] == "todo"
+    assert body["is_record_only"] is False
+    assert body["start_date"] == past_due_date
+    assert body["due_date"] == past_due_date
+
+
+@pytest.mark.asyncio
+async def test_task_due_date_cannot_be_before_explicit_start_date(client):
+    project, _, member_one, _ = await setup_project_with_members(client)
+    start_date = date.today().isoformat()
+    due_date = (date.today() - timedelta(days=1)).isoformat()
+
+    response = await client.post(
+        f"/projects/{project['id']}/tasks",
+        json={
+            "title": "Impossible schedule",
+            "assignee_ids": [member_one["id"]],
+            "start_date": start_date,
+            "due_date": due_date,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Due date cannot be before start date"
+
+
+@pytest.mark.asyncio
+async def test_updating_task_to_past_due_date_keeps_dates_ordered(client):
+    project, _, member_one, _ = await setup_project_with_members(client)
+    created = await client.post(
+        f"/projects/{project['id']}/tasks",
+        json={"title": "Follow-up", "assignee_ids": [member_one["id"]]},
+    )
+    past_due_date = (date.today() - timedelta(days=2)).isoformat()
+
+    updated = await client.patch(
+        f"/projects/{project['id']}/tasks/{created.json()['id']}",
+        json={"due_date": past_due_date},
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["start_date"] == past_due_date
+    assert updated.json()["due_date"] == past_due_date
 
 
 @pytest.mark.asyncio
