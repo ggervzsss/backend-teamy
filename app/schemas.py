@@ -251,6 +251,35 @@ class AnnouncementSocketTicketResponse(ApiModel):
     ticket: str
 
 
+class DashboardDeadlineItemResponse(ApiModel):
+    id: str
+    source_id: UUID
+    kind: Literal["announcement", "task"]
+    title: str
+    due_date: date | None = None
+
+
+class DashboardActivityItemResponse(ApiModel):
+    id: str
+    kind: Literal["announcement", "task", "file"]
+    title: str
+    description: str
+    actor: str
+    timestamp: datetime
+    target_path: str
+
+
+class DashboardSummaryResponse(ApiModel):
+    recent_announcements: list[AnnouncementResponse]
+    pending_tasks: list[TaskResponse]
+    tasks_for_review: list[TaskResponse]
+    deadline_items: list[DashboardDeadlineItemResponse]
+    activity_items: list[DashboardActivityItemResponse]
+    active_task_count: int
+    my_pending_task_count: int
+    tasks_for_review_count: int
+
+
 class TaskCreateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=4000)

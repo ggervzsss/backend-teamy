@@ -3,7 +3,7 @@ from datetime import UTC, date, datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -222,14 +222,20 @@ async def serialize_announcements_batch(db: AsyncSession, announcements: list[An
 async def list_announcements(
     user: Annotated[User, Depends(get_current_user)],
     membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
+    limit: Annotated[int | None, Query(ge=1, le=500)] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
     db: AsyncSession = Depends(get_db),
 ) -> AnnouncementListResponse:
     project, _ = membership
-    result = await db.execute(
+    query = (
         select(Announcement)
         .where(Announcement.project_id == project.id)
         .order_by(Announcement.is_pinned.desc(), Announcement.created_at.desc(), Announcement.updated_at.desc())
+        .offset(offset)
     )
+    if limit is not None:
+        query = query.limit(limit)
+    result = await db.execute(query)
     announcements = list(result.scalars().all())
     did_sync_state = False
     for announcement in announcements:

@@ -2,7 +2,7 @@ from collections import defaultdict
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -141,10 +141,15 @@ async def serialize_file_resources_batch(
 @router.get("", response_model=FileResourceListResponse)
 async def list_file_resources(
     membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
+    limit: Annotated[int | None, Query(ge=1, le=500)] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
     db: AsyncSession = Depends(get_db),
 ) -> FileResourceListResponse:
     project, _ = membership
-    result = await db.execute(select(FileResource).where(FileResource.project_id == project.id).order_by(FileResource.updated_at.desc(), FileResource.created_at.desc()))
+    query = select(FileResource).where(FileResource.project_id == project.id).order_by(FileResource.updated_at.desc(), FileResource.created_at.desc()).offset(offset)
+    if limit is not None:
+        query = query.limit(limit)
+    result = await db.execute(query)
     resources = result.scalars().all()
     return FileResourceListResponse(files=await serialize_file_resources_batch(db, list(resources)))
 

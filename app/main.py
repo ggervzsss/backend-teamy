@@ -9,6 +9,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from app.announcements import router as announcements_router
 from app.auth import router as auth_router
 from app.config import get_settings
+from app.dashboard import router as dashboard_router
 from app.filehub import router as filehub_router
 from app.notifications import router as notifications_router
 from app.projects import router as projects_router
@@ -33,6 +34,7 @@ def create_app() -> FastAPI:
 
     app.include_router(auth_router)
     app.include_router(projects_router)
+    app.include_router(dashboard_router)
     app.include_router(filehub_router)
     app.include_router(tasks_router)
     app.include_router(announcements_router)

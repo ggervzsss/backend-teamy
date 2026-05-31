@@ -3,7 +3,7 @@ from datetime import UTC, date, datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -368,10 +368,15 @@ async def list_project_members(
 @router.get("/tasks", response_model=TaskListResponse)
 async def list_tasks(
     membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
+    limit: Annotated[int | None, Query(ge=1, le=500)] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
     db: AsyncSession = Depends(get_db),
 ) -> TaskListResponse:
     project, _ = membership
-    result = await db.execute(select(Task).where(Task.project_id == project.id, Task.is_private.is_(False)).order_by(Task.created_at.desc()))
+    query = select(Task).where(Task.project_id == project.id, Task.is_private.is_(False)).order_by(Task.created_at.desc()).offset(offset)
+    if limit is not None:
+        query = query.limit(limit)
+    result = await db.execute(query)
     tasks = list(result.scalars().all())
     return TaskListResponse(tasks=await serialize_tasks_batch(db, tasks, project.id))
 
@@ -380,15 +385,21 @@ async def list_tasks(
 async def list_my_tasks(
     user: Annotated[User, Depends(get_current_user)],
     membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
+    limit: Annotated[int | None, Query(ge=1, le=500)] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
     db: AsyncSession = Depends(get_db),
 ) -> TaskListResponse:
     project, _ = membership
-    result = await db.execute(
+    query = (
         select(Task)
         .join(TaskAssignee, TaskAssignee.task_id == Task.id)
         .where(Task.project_id == project.id, TaskAssignee.user_id == user.id)
         .order_by(Task.created_at.desc())
+        .offset(offset)
     )
+    if limit is not None:
+        query = query.limit(limit)
+    result = await db.execute(query)
     tasks = list(result.scalars().all())
     return TaskListResponse(tasks=await serialize_tasks_batch(db, tasks, project.id))
 
@@ -870,5 +881,4 @@ async def task_updates(websocket: WebSocket, project_id: UUID) -> None:
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(project_id, websocket)
-
 
