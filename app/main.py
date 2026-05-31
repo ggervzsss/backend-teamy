@@ -1,4 +1,5 @@
 import logging
+from time import perf_counter
 
 from fastapi import FastAPI
 from fastapi import Request
@@ -31,6 +32,27 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.add_middleware(GZipMiddleware, minimum_size=500)
+
+    @app.middleware("http")
+    async def log_request_duration(request: Request, call_next):
+        started_at = perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            duration_ms = (perf_counter() - started_at) * 1000
+            logger.info("request completed method=%s path=%s status=500 duration_ms=%.2f", request.method, request.url.path, duration_ms)
+            raise
+
+        duration_ms = (perf_counter() - started_at) * 1000
+        response.headers["X-Process-Time-Ms"] = f"{duration_ms:.2f}"
+        logger.info(
+            "request completed method=%s path=%s status=%s duration_ms=%.2f",
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration_ms,
+        )
+        return response
 
     app.include_router(auth_router)
     app.include_router(projects_router)

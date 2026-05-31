@@ -12,7 +12,7 @@ from app.config import get_settings
 from app.database import SessionLocal, get_db
 from app.dependencies import get_current_user
 from app.models import Announcement, AnnouncementRead, Project, ProjectMember, User
-from app.notifications import create_user_notifications, get_project_member_recipients, send_announcement_email
+from app.notifications import create_user_notifications, send_announcement_email_to_project_members
 from app.projects import get_project_membership, require_project_active
 from app.schemas import (
     AnnouncementCreateRequest,
@@ -300,6 +300,7 @@ async def create_announcement(
             body=announcement.body,
             target_path=f"/projects/{project.id}/announcements",
             is_email_backed=True,
+            background_tasks=background_tasks,
         )
     await db.commit()
     await db.refresh(announcement)
@@ -307,18 +308,16 @@ async def create_announcement(
     response = await serialize_announcement(db, announcement, user.id, is_read=True)
     broadcast_announcement = response.model_copy(update={"is_read": True if announcement.is_record_only else False})
     if not payload.is_record_only:
-        recipients = await get_project_member_recipients(db, project.id)
         background_tasks.add_task(
-            send_announcement_email,
+            send_announcement_email_to_project_members,
             settings,
-            recipients,
             project.id,
             project.name,
             announcement.title,
             announcement.body,
             announcement.deadline_date,
         )
-    await manager.broadcast(project.id, {"event": "announcement.created", "announcement": broadcast_announcement})
+    background_tasks.add_task(manager.broadcast, project.id, {"event": "announcement.created", "announcement": broadcast_announcement})
     return response
 
 
@@ -326,6 +325,7 @@ async def create_announcement(
 async def update_announcement(
     announcement_id: UUID,
     payload: AnnouncementUpdateRequest,
+    background_tasks: BackgroundTasks,
     user: Annotated[User, Depends(get_current_user)],
     membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
     db: AsyncSession = Depends(get_db),
@@ -367,7 +367,7 @@ async def update_announcement(
 
     response = await serialize_announcement(db, announcement, user.id)
     broadcast_announcement = response.model_copy(update={"is_read": True if announcement.is_record_only else False})
-    await manager.broadcast(project.id, {"event": "announcement.updated", "announcement": broadcast_announcement})
+    background_tasks.add_task(manager.broadcast, project.id, {"event": "announcement.updated", "announcement": broadcast_announcement})
     return response
 
 
@@ -427,6 +427,7 @@ async def mark_announcement_as_read(
 async def update_announcement_pin(
     announcement_id: UUID,
     payload: AnnouncementPinRequest,
+    background_tasks: BackgroundTasks,
     user: Annotated[User, Depends(get_current_user)],
     membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
     db: AsyncSession = Depends(get_db),
@@ -445,13 +446,14 @@ async def update_announcement_pin(
 
     response = await serialize_announcement(db, announcement, user.id)
     broadcast_announcement = response.model_copy(update={"is_read": False})
-    await manager.broadcast(project.id, {"event": "announcement.updated", "announcement": broadcast_announcement})
+    background_tasks.add_task(manager.broadcast, project.id, {"event": "announcement.updated", "announcement": broadcast_announcement})
     return response
 
 
 @router.patch("/{announcement_id}/deadline-done", response_model=AnnouncementResponse)
 async def mark_announcement_deadline_done(
     announcement_id: UUID,
+    background_tasks: BackgroundTasks,
     user: Annotated[User, Depends(get_current_user)],
     membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
     db: AsyncSession = Depends(get_db),
@@ -467,13 +469,14 @@ async def mark_announcement_deadline_done(
 
     response = await serialize_announcement(db, announcement, user.id)
     broadcast_announcement = response.model_copy(update={"is_read": False})
-    await manager.broadcast(project.id, {"event": "announcement.updated", "announcement": broadcast_announcement})
+    background_tasks.add_task(manager.broadcast, project.id, {"event": "announcement.updated", "announcement": broadcast_announcement})
     return response
 
 
 @router.delete("/{announcement_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_announcement(
     announcement_id: UUID,
+    background_tasks: BackgroundTasks,
     user: Annotated[User, Depends(get_current_user)],
     membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
     db: AsyncSession = Depends(get_db),
@@ -486,7 +489,7 @@ async def delete_announcement(
     await db.execute(delete(AnnouncementRead).where(AnnouncementRead.announcement_id == announcement.id))
     await db.delete(announcement)
     await db.commit()
-    await manager.broadcast(project.id, {"event": "announcement.deleted", "announcement_id": announcement_id})
+    background_tasks.add_task(manager.broadcast, project.id, {"event": "announcement.deleted", "announcement_id": announcement_id})
 
 
 @router.post("/{announcement_id}/notify", status_code=status.HTTP_204_NO_CONTENT)
@@ -513,14 +516,13 @@ async def notify_announcement(
         body=announcement.body,
         target_path=f"/projects/{project.id}/announcements",
         is_email_backed=True,
+        background_tasks=background_tasks,
     )
     await db.commit()
 
-    recipients = await get_project_member_recipients(db, project.id)
     background_tasks.add_task(
-        send_announcement_email,
+        send_announcement_email_to_project_members,
         settings,
-        recipients,
         project.id,
         project.name,
         announcement.title,

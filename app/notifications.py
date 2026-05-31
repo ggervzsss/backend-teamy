@@ -89,6 +89,7 @@ async def create_user_notifications(
     body: str | None,
     target_path: str | None,
     is_email_backed: bool = False,
+    background_tasks: BackgroundTasks | None = None,
 ) -> None:
     created_notifications: list[Notification] = []
     created_at = datetime.now(UTC)
@@ -109,7 +110,11 @@ async def create_user_notifications(
         return
     await db.flush()
     for notification in created_notifications:
-        await manager.broadcast(notification.user_id, {"event": "notification.created", "notification": serialize_notification(notification)})
+        payload = {"event": "notification.created", "notification": serialize_notification(notification)}
+        if background_tasks is not None:
+            background_tasks.add_task(manager.broadcast, notification.user_id, payload)
+        else:
+            await manager.broadcast(notification.user_id, payload)
 
 
 @router.get("/ws-ticket", response_model=NotificationSocketTicketResponse)
@@ -349,6 +354,56 @@ async def send_announcement_email(
     body = f"<p>A new announcement was posted in {safe_project}: <strong>{safe_title}</strong>.</p><p>{safe_body}</p>{deadline}"
     text = f"New announcement in {project_name}: {announcement_title}\n\n{body_text}\nOpen: {announcement_url}"
     await send_email(settings, recipients, f"New announcement: {announcement_title}", build_email_shell("New announcement", body, announcement_url), text)
+
+
+async def send_task_assignment_email_to_users(
+    settings: Settings,
+    user_ids: set[UUID],
+    project_id: UUID,
+    project_name: str,
+    task_title: str,
+    due_date: date | None,
+) -> None:
+    async with SessionLocal() as db:
+        recipients = await get_user_recipients(db, user_ids)
+    await send_task_assignment_email(settings, recipients, project_id, project_name, task_title, due_date)
+
+
+async def send_task_ready_for_review_email_to_project_leaders(
+    settings: Settings,
+    project_id: UUID,
+    project_name: str,
+    task_title: str,
+) -> None:
+    async with SessionLocal() as db:
+        recipients = await get_project_leader_recipients(db, project_id)
+    await send_task_ready_for_review_email(settings, recipients, project_id, project_name, task_title)
+
+
+async def send_task_changes_requested_email_to_users(
+    settings: Settings,
+    user_ids: set[UUID],
+    project_id: UUID,
+    project_name: str,
+    task_title: str,
+    remarks: str | None,
+) -> None:
+    async with SessionLocal() as db:
+        recipients = await get_user_recipients(db, user_ids)
+    await send_task_changes_requested_email(settings, recipients, project_id, project_name, task_title, remarks)
+
+
+async def send_announcement_email_to_project_members(
+    settings: Settings,
+    project_id: UUID,
+    project_name: str,
+    announcement_title: str,
+    body_text: str,
+    deadline_date: date | None,
+) -> None:
+    async with SessionLocal() as db:
+        recipients = await get_project_member_recipients(db, project_id)
+    await send_announcement_email(settings, recipients, project_id, project_name, announcement_title, body_text, deadline_date)
 
 
 async def send_task_ready_for_review_email(

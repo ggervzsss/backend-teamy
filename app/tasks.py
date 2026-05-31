@@ -15,11 +15,9 @@ from app.html_sanitizer import sanitize_html
 from app.models import FileResource, Project, ProjectMember, Task, TaskAssignee, TaskFileLink, User
 from app.notifications import (
     create_user_notifications,
-    get_project_leader_recipients,
-    get_user_recipients,
-    send_task_assignment_email,
-    send_task_changes_requested_email,
-    send_task_ready_for_review_email,
+    send_task_assignment_email_to_users,
+    send_task_changes_requested_email_to_users,
+    send_task_ready_for_review_email_to_project_leaders,
 )
 from app.projects import get_project_membership, require_project_active
 from app.schemas import (
@@ -492,15 +490,15 @@ async def create_task(
             body=f"You have been assigned to {task.title} in {project.name}.",
             target_path=f"/projects/{project.id}/task-board",
             is_email_backed=True,
+            background_tasks=background_tasks,
         )
     await db.commit()
     await db.refresh(task)
     response = await serialize_task(db, task)
     if not is_done_on_create and not payload.is_private:
-        recipients = await get_user_recipients(db, set(assignee_ids))
-        background_tasks.add_task(send_task_assignment_email, settings, recipients, project.id, project.name, task.title, task.due_date)
+        background_tasks.add_task(send_task_assignment_email_to_users, settings, set(assignee_ids), project.id, project.name, task.title, task.due_date)
     if not payload.is_private:
-        await manager.broadcast(project.id, "task.created", response)
+        background_tasks.add_task(manager.broadcast, project.id, "task.created", response)
     return response
 
 
@@ -584,15 +582,15 @@ async def update_task(
             body=f"You have been assigned to {task.title} in {project.name}.",
             target_path=f"/projects/{project.id}/task-board",
             is_email_backed=True,
+            background_tasks=background_tasks,
         )
     await db.commit()
     await db.refresh(task)
     response = await serialize_task(db, task)
     if newly_assigned_user_ids and not task.is_private:
-        recipients = await get_user_recipients(db, newly_assigned_user_ids)
-        background_tasks.add_task(send_task_assignment_email, settings, recipients, project.id, project.name, task.title, task.due_date)
+        background_tasks.add_task(send_task_assignment_email_to_users, settings, newly_assigned_user_ids, project.id, project.name, task.title, task.due_date)
     if not task.is_private:
-        await manager.broadcast(project.id, "task.updated", response)
+        background_tasks.add_task(manager.broadcast, project.id, "task.updated", response)
     return response
 
 
@@ -600,6 +598,7 @@ async def update_task(
 async def link_task_file(
     task_id: UUID,
     payload: TaskLinkedFileCreateRequest,
+    background_tasks: BackgroundTasks,
     user: Annotated[User, Depends(get_current_user)],
     membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
     db: AsyncSession = Depends(get_db),
@@ -621,7 +620,7 @@ async def link_task_file(
     await db.commit()
     await db.refresh(task)
     response = await serialize_task(db, task)
-    await manager.broadcast(project.id, "task.updated", response)
+    background_tasks.add_task(manager.broadcast, project.id, "task.updated", response)
     return response
 
 
@@ -629,6 +628,7 @@ async def link_task_file(
 async def link_existing_task_file(
     task_id: UUID,
     payload: TaskExistingFileLinkRequest,
+    background_tasks: BackgroundTasks,
     user: Annotated[User, Depends(get_current_user)],
     membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
     db: AsyncSession = Depends(get_db),
@@ -655,7 +655,7 @@ async def link_existing_task_file(
         await db.refresh(task)
 
     response = await serialize_task(db, task)
-    await manager.broadcast(project.id, "task.updated", response)
+    background_tasks.add_task(manager.broadcast, project.id, "task.updated", response)
     return response
 
 
@@ -663,6 +663,7 @@ async def link_existing_task_file(
 async def update_my_task_status(
     task_id: UUID,
     payload: TaskAssigneeUpdateRequest,
+    background_tasks: BackgroundTasks,
     user: Annotated[User, Depends(get_current_user)],
     membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
     db: AsyncSession = Depends(get_db),
@@ -699,7 +700,7 @@ async def update_my_task_status(
     await db.commit()
     await db.refresh(task)
     response = await serialize_task(db, task)
-    await manager.broadcast(project.id, "task.updated", response)
+    background_tasks.add_task(manager.broadcast, project.id, "task.updated", response)
     return response
 
 
@@ -747,11 +748,11 @@ async def submit_task_for_review(
         body=f"{task.title} in {project.name} has been submitted for review.",
         target_path=f"/projects/{project.id}/task-board",
         is_email_backed=True,
+        background_tasks=background_tasks,
     )
     await db.commit()
-    recipients = await get_project_leader_recipients(db, project.id)
-    background_tasks.add_task(send_task_ready_for_review_email, settings, recipients, project.id, project.name, task.title)
-    await manager.broadcast(project.id, "task.submitted", response)
+    background_tasks.add_task(send_task_ready_for_review_email_to_project_leaders, settings, project.id, project.name, task.title)
+    background_tasks.add_task(manager.broadcast, project.id, "task.submitted", response)
     return response
 
 
@@ -798,29 +799,30 @@ async def review_task(
             body=task.review_remarks or f"{task.title} needs revisions or additional changes.",
             target_path=f"/projects/{project.id}/task-board",
             is_email_backed=True,
+            background_tasks=background_tasks,
         )
 
     await db.commit()
     await db.refresh(task)
     response = await serialize_task(db, task)
     if payload.action == "request_changes":
-        recipients = await get_user_recipients(db, {assignee.user.id for assignee in response.assignees})
         background_tasks.add_task(
-            send_task_changes_requested_email,
+            send_task_changes_requested_email_to_users,
             settings,
-            recipients,
+            {assignee.user.id for assignee in response.assignees},
             project.id,
             project.name,
             task.title,
             task.review_remarks,
         )
-    await manager.broadcast(project.id, "task.reviewed", response)
+    background_tasks.add_task(manager.broadcast, project.id, "task.reviewed", response)
     return response
 
 
 @router.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_task(
     task_id: UUID,
+    background_tasks: BackgroundTasks,
     user: Annotated[User, Depends(get_current_user)],
     membership: Annotated[tuple[Project, ProjectMember], Depends(get_project_membership)],
     db: AsyncSession = Depends(get_db),
@@ -835,7 +837,7 @@ async def delete_task(
     await db.delete(task)
     await db.commit()
     if not task.is_private:
-        await manager.broadcast(project.id, "task.deleted", response)
+        background_tasks.add_task(manager.broadcast, project.id, "task.deleted", response)
 
 
 @router.websocket("/tasks/ws")
@@ -881,4 +883,3 @@ async def task_updates(websocket: WebSocket, project_id: UUID) -> None:
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(project_id, websocket)
-
